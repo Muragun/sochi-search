@@ -89,7 +89,15 @@ def check_password(username: str, password: str) -> bool:
 
     # Сравнение постоянного времени по обоим полям: оно не должно
     # зависеть от того, где именно расходятся значения.
-    username_ok = secrets.compare_digest(username, admin_username())
+    #
+    # Имена сравниваются байтами, а не строками. compare_digest со
+    # строками требует ASCII и на кириллическом логине бросает
+    # TypeError — форма входа отдавала бы пятисотку вместо «неверный
+    # логин или пароль», причём любому, кто введёт русское слово.
+    username_ok = secrets.compare_digest(
+        username.encode("utf-8"),
+        admin_username().encode("utf-8"),
+    )
     password_ok = secrets.compare_digest(given_hash, expected_hash)
 
     return username_ok and password_ok

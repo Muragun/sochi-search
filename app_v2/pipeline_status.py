@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import copy
+import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from crawler_v2.pdf_ocr import (
     PDF_EXTRACTION_VERSION,
@@ -213,12 +217,69 @@ def latest_discovery(
     return dict(row) if row is not None else None
 
 
+# Сводка читает таблицу очереди целиком — на рабочем корпусе это около
+# восьмидесяти тысяч строк. Страница поиска опрашивает /pipeline/status
+# раз в тридцать секунд, панель управления — раз в пятнадцать, и каждая
+# открытая вкладка добавляет свой опрос. Без кэша десяток вкладок
+# устраивает серверу постоянный полный скан.
+#
+# Кэш общий на процесс, ключ — путь к базе. Срок берётся с запасом,
+# чтобы страница поиска попадала в него между своими обновлениями.
+CACHE_TTL_SECONDS = float(os.getenv("PIPELINE_STATUS_CACHE_SECONDS", "20"))
+
+_cache: Dict[str, Tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
+
+
+def reset_pipeline_status_cache() -> None:
+    """Сбрасывает кэш сводки. Нужен тестам и после запуска задачи."""
+
+    with _cache_lock:
+        _cache.clear()
+
+
 def build_pipeline_status(
     database_path: Path,
     *,
     elasticsearch_documents: Optional[int] = None,
     elasticsearch_available: bool = True,
 ) -> dict[str, Any]:
+    if not database_path.is_file():
+        raise PipelineStatusUnavailable("SQLite crawler не найдена")
+
+    key = str(database_path.resolve())
+    now = time.monotonic()
+
+    if CACHE_TTL_SECONDS > 0:
+        with _cache_lock:
+            cached = _cache.get(key)
+
+            if cached is not None and now - cached[0] < CACHE_TTL_SECONDS:
+                # Копия: вызывающий дополняет сводку своими полями, и
+                # общий кэш не должен от этого меняться.
+                return copy.deepcopy(cached[1])
+
+    payload = collect_pipeline_status(
+        database_path,
+        elasticsearch_documents=elasticsearch_documents,
+        elasticsearch_available=elasticsearch_available,
+    )
+
+    if CACHE_TTL_SECONDS > 0:
+        with _cache_lock:
+            _cache[key] = (now, copy.deepcopy(payload))
+
+    return payload
+
+
+def collect_pipeline_status(
+    database_path: Path,
+    *,
+    elasticsearch_documents: Optional[int] = None,
+    elasticsearch_available: bool = True,
+) -> dict[str, Any]:
+    """Читает очередь и собирает сводку. Без кэша, всегда заново."""
+
     if not database_path.is_file():
         raise PipelineStatusUnavailable("SQLite crawler не найдена")
 

@@ -289,6 +289,27 @@ function taskStateLabel(state) {
 
 function renderTasks(tasks) {
     knownTasks = tasks || [];
+
+    // Карточки пересобираются целиком каждые 15 секунд. Поле адреса при
+    // этом обнулялось прямо во время набора, и длинный URL было не
+    // ввести. Сохраняем содержимое полей и то, какое из них было в
+    // фокусе, чтобы вернуть после перерисовки.
+    const typed = new Map();
+    const active = document.activeElement;
+    let focusedKey = null;
+    let selection = null;
+
+    for (const input of elements.tasks.querySelectorAll("input[data-task]")) {
+        if (input.value) {
+            typed.set(input.dataset.task, input.value);
+        }
+
+        if (input === active) {
+            focusedKey = input.dataset.task;
+            selection = [input.selectionStart, input.selectionEnd];
+        }
+    }
+
     clear(elements.tasks);
 
     knownTasks.forEach((task) => {
@@ -321,6 +342,18 @@ function renderTasks(tasks) {
             urlInput = document.createElement("input");
             urlInput.type = "url";
             urlInput.placeholder = "https://sochi.ru/...";
+            urlInput.dataset.task = task.key;
+
+            // Без подписи скринридер прочитает просто «поле ввода» и не
+            // скажет, к какой задаче оно относится.
+            urlInput.setAttribute(
+                "aria-label", `Адрес документа для задачи «${task.title}»`
+            );
+
+            if (typed.has(task.key)) {
+                urlInput.value = typed.get(task.key);
+            }
+
             actions.appendChild(urlInput);
         }
 
@@ -351,8 +384,37 @@ function renderTasks(tasks) {
         elements.tasks.appendChild(box);
     });
 
+    if (focusedKey) {
+        const restored = elements.tasks.querySelector(
+            `input[data-task="${focusedKey}"]`
+        );
+
+        if (restored) {
+            restored.focus();
+
+            if (selection) {
+                restored.setSelectionRange(selection[0], selection[1]);
+            }
+        }
+    }
+
     fillLogSources();
 }
+
+// Сессия живёт 12 часов. Когда она истекает, любой запрос панели
+// получает 401, и раньше это выглядело как «Ошибка 401» в углу при
+// продолжающемся опросе раз в 15 секунд. Теперь один раз уводим на
+// страницу входа.
+function handleAuthLoss(response) {
+    if (response.status !== 401 && response.status !== 403) {
+        return false;
+    }
+
+    window.location.href = "/admin/login";
+
+    return true;
+}
+
 
 async function startTask(key, url, button) {
     if (button) button.disabled = true;
@@ -363,6 +425,8 @@ async function startTask(key, url, button) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url: url || null }),
         });
+
+        if (handleAuthLoss(response)) return;
 
         if (!response.ok) {
             const payload = await response.json().catch(() => ({}));
@@ -382,7 +446,20 @@ async function stopTask(key) {
     if (!window.confirm("Остановить задачу?")) return;
 
     try {
-        await fetch(`/admin/api/tasks/${key}/stop`, { method: "POST" });
+        const response = await fetch(
+            `/admin/api/tasks/${key}/stop`, { method: "POST" }
+        );
+
+        if (handleAuthLoss(response)) return;
+
+        // Бэкенд отвечает 409, если задача уже не выполняется, и 404 на
+        // неизвестный ключ. Без проверки пользователь нажимал
+        // «Остановить» и не получал никакого объяснения, почему задача
+        // всё ещё идёт.
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            window.alert(payload.detail || `Ошибка ${response.status}`);
+        }
     } catch (error) {
         window.alert(`Не удалось остановить: ${error}`);
     }
@@ -424,7 +501,23 @@ async function loadLog() {
 
     try {
         const response = await fetch(url);
-        const payload = await response.json();
+
+        if (handleAuthLoss(response)) return;
+
+        const payload = await response.json().catch(() => ({}));
+
+        // На ошибку тело содержит detail, а не log. Раньше показывалось
+        // «(пусто)», и выглядело это как «задача ничего не написала» —
+        // особенно скверно в режиме слежения, где текст обновляется
+        // каждые пять секунд.
+        if (!response.ok) {
+            elements.logOutput.textContent = (
+                payload.detail
+                || `Журнал недоступен: ошибка ${response.status}`
+            );
+            return;
+        }
+
         elements.logOutput.textContent = payload.log || "(пусто)";
         elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
     } catch (error) {
@@ -440,11 +533,19 @@ async function refresh() {
             headers: { Accept: "application/json" },
         });
 
+        if (handleAuthLoss(response)) return;
+
         if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
             elements.stateError.hidden = false;
-            elements.stateError.textContent = `Ошибка ${response.status}`;
+            elements.stateError.textContent = (
+                payload.detail
+                || `Сводка недоступна: ошибка ${response.status}`
+            );
             return;
         }
+
+        elements.stateError.hidden = true;
 
         const data = await response.json();
         window.__services = data.services || [];

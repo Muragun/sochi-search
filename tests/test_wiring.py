@@ -743,3 +743,160 @@ class Python38SyntaxTests(unittest.TestCase):
                 )
 
         self.assertEqual(problems, [], msg="\n".join(problems))
+
+
+class CallSignatureTests(unittest.TestCase):
+    """
+    Вызовы своих же функций должны сходиться с их сигнатурами.
+
+    Случай, ради которого написан тест: `admin.py` вызывал
+    `build_pipeline_status()` без обязательного аргумента. Это TypeError,
+    а не объявленное исключение, поэтому `except PipelineStatusUnavailable`
+    его не ловил — и раздел управления отдавал 500 на каждый запрос, при
+    любом состоянии системы. Панель показывала пустые блоки и надпись
+    «Ошибка 500», больше ничего.
+
+    Ни один тест этого не видел: `tests/test_admin.py` разбирает исходник
+    через `ast` и эндпойнт не вызывает, а импортировать модуль нельзя —
+    в окружении проверки нет FastAPI.
+
+    Поэтому проверка тоже статическая: собираются определения функций по
+    всем пакетам, затем каждый вызов по имени сверяется с сигнатурой.
+    Ловит нехватку обязательных аргументов, лишние позиционные и
+    неизвестные именованные.
+    """
+
+    PACKAGES = ("app_v2", "crawler_v2", "ops")
+
+    def collect_definitions(self):
+        """Имя функции → (обязательные, всего позиционных, имена, *args, **kwargs)."""
+
+        definitions = {}
+        duplicates = set()
+
+        for package in self.PACKAGES:
+            for path in sorted((SOURCE / package).glob("*.py")):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+
+                for node in tree.body:
+                    if not isinstance(
+                        node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        continue
+
+                    arguments = node.args
+                    positional = arguments.posonlyargs + arguments.args
+                    defaults = len(arguments.defaults)
+                    keyword_only = {a.arg for a in arguments.kwonlyargs}
+
+                    entry = (
+                        len(positional) - defaults,
+                        len(positional),
+                        {a.arg for a in positional} | keyword_only,
+                        arguments.vararg is not None,
+                        arguments.kwarg is not None,
+                        {
+                            a.arg
+                            for a, d in zip(
+                                arguments.kwonlyargs, arguments.kw_defaults
+                            )
+                            if d is None
+                        },
+                    )
+
+                    if node.name in definitions and definitions[node.name] != entry:
+                        # Одноимённые функции с разными сигнатурами
+                        # проверять нельзя: по имени вызова не понять,
+                        # какая из них имелась в виду.
+                        duplicates.add(node.name)
+
+                    definitions[node.name] = entry
+
+        for name in duplicates:
+            definitions.pop(name, None)
+
+        return definitions
+
+    def test_calls_match_signatures(self) -> None:
+        definitions = self.collect_definitions()
+        self.assertGreater(len(definitions), 50, msg="определения не собрались")
+
+        problems = []
+
+        for package in self.PACKAGES:
+            for path in sorted((SOURCE / package).glob("*.py")):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+
+                    if not isinstance(node.func, ast.Name):
+                        continue
+
+                    signature = definitions.get(node.func.id)
+
+                    if signature is None:
+                        continue
+
+                    (
+                        required,
+                        maximum,
+                        names,
+                        has_vararg,
+                        has_kwarg,
+                        required_keyword_only,
+                    ) = signature
+
+                    # Распаковка аргументов делает подсчёт бессмысленным.
+                    if any(
+                        isinstance(a, ast.Starred) for a in node.args
+                    ) or any(k.arg is None for k in node.keywords):
+                        continue
+
+                    given_positional = len(node.args)
+                    given_names = {k.arg for k in node.keywords}
+                    where = (
+                        f"{path.relative_to(SOURCE)}:{node.lineno} "
+                        f"{node.func.id}()"
+                    )
+
+                    if given_positional + len(given_names) < required or (
+                        given_positional < required
+                        and not (given_names & names)
+                    ):
+                        problems.append(
+                            f"{where}: передано "
+                            f"{given_positional + len(given_names)} "
+                            f"аргументов, обязательных {required}"
+                        )
+                        continue
+
+                    if not has_vararg and given_positional > maximum:
+                        problems.append(
+                            f"{where}: позиционных {given_positional}, "
+                            f"принимается не больше {maximum}"
+                        )
+
+                    if not has_kwarg:
+                        unknown = given_names - names
+
+                        if unknown:
+                            problems.append(
+                                f"{where}: неизвестные аргументы "
+                                f"{sorted(unknown)}"
+                            )
+
+                    missing = required_keyword_only - given_names
+
+                    if missing:
+                        problems.append(
+                            f"{where}: не переданы обязательные "
+                            f"{sorted(missing)}"
+                        )
+
+        self.assertEqual(
+            problems,
+            [],
+            msg="Вызовы не сходятся с сигнатурами:\n" + "\n".join(problems),
+        )

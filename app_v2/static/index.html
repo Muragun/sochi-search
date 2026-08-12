@@ -441,10 +441,16 @@
 
     <footer class="footer">
         <div>Внутренний поиск по индексу Elasticsearch · версия 2.5</div>
+        <!--
+            Прежде здесь стояли ссылки на /health/ready и
+            /pipeline/status — то есть на сырой JSON. То же самое, но
+            по-человечески, показывает панель «Состояние поискового
+            индекса» на этой же странице, поэтому ссылка ведёт туда.
+        -->
         <div class="footer__links">
-            <a href="/docs">API</a>
-            <a href="/health/ready">Состояние</a>
-            <a href="/pipeline/status">Загрузка</a>
+            <a href="#pipeline-panel" data-open-pipeline>Состояние индекса</a>
+            <a href="/admin">Управление</a>
+            <a href="/docs">Описание API</a>
         </div>
     </footer>
 </body>

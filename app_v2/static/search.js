@@ -1,7 +1,10 @@
 "use strict";
 
 
-const MAX_OFFSET = 10000;
+// Столько же, сколько разрешает API (main.py, параметр offset).
+// Раньше здесь стояло 10000: последние страницы выдачи рисовались, но
+// при переходе API отвечал ошибкой валидации на английском.
+const MAX_OFFSET = 9000;
 const MAX_RECENT_SEARCHES = 6;
 const RECENT_SEARCHES_KEY = "sochi-search:recent:v1";
 const PIPELINE_REFRESH_MS = 30000;
@@ -1010,6 +1013,12 @@ function renderEmptyState() {
 
 
 function renderSearchError(message) {
+    // Иначе под карточкой «Поиск временно недоступен» остаётся живая
+    // пагинация от прошлого удачного запроса: «Страница 3 из 57».
+    state.total = 0;
+    state.lastItemsCount = 0;
+    state.currentItems = [];
+
     elements.results.replaceChildren();
     elements.searchMeta.hidden = true;
     elements.facetTabs.hidden = true;
@@ -1566,6 +1575,25 @@ function resetForm() {
 }
 
 
+// Присвоение значения, которого нет среди вариантов, оставляет select
+// пустым, и следующий запрос уходит с limit= или sort= без значения —
+// API отвечает ошибкой валидации на английском. Чужая ссылка с
+// ?limit=25 ломала поиск сразу при открытии.
+function setSelectValue(select, value) {
+    if (!select || value === null || value === undefined || value === "") {
+        return;
+    }
+
+    const known = Array.from(select.options).some(
+        (option) => option.value === String(value)
+    );
+
+    if (known) {
+        select.value = String(value);
+    }
+}
+
+
 function applyStateFromUrl() {
     const parameters = new URLSearchParams(window.location.search);
     elements.form.reset();
@@ -1584,7 +1612,13 @@ function applyStateFromUrl() {
     for (const [name, element] of assignments) {
         const value = parameters.get(name);
 
-        if (value !== null) {
+        if (value === null) {
+            continue;
+        }
+
+        if (element.tagName === "SELECT") {
+            setSelectValue(element, value);
+        } else {
             element.value = value;
         }
     }
@@ -1855,6 +1889,28 @@ elements.answerClose.addEventListener("click", clearAnswer);
 elements.resetButton.addEventListener("click", resetForm);
 elements.exportButton.addEventListener("click", exportCurrentPage);
 elements.pipelineRefresh.addEventListener("click", loadPipelineStatus);
+
+// Ссылка «Состояние индекса» в подвале.
+//
+// Раньше на её месте стояли ссылки прямо на /health/ready и
+// /pipeline/status, то есть на сырой JSON. Теперь ссылка разворачивает
+// панель состояния на этой же странице: данные те же, но читаемые.
+for (const link of document.querySelectorAll("[data-open-pipeline]")) {
+    link.addEventListener("click", (event) => {
+        event.preventDefault();
+
+        ensurePipelineToggle();
+        setPipelineCollapsed(false);
+        loadPipelineStatus();
+
+        if (elements.pipelinePanel) {
+            elements.pipelinePanel.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+            });
+        }
+    });
+}
 
 elements.sort.addEventListener("change", () => {
     if (state.hasExecutedSearch && hasSearchCondition()) {

@@ -8,6 +8,8 @@ from pathlib import Path
 from app_v2.pipeline_status import (
     PipelineStatusUnavailable,
     build_pipeline_status,
+    collect_pipeline_status,
+    reset_pipeline_status_cache,
 )
 
 
@@ -111,7 +113,7 @@ class PipelineStatusTests(unittest.TestCase):
     def test_status_has_clear_loaded_remaining_and_queue_counts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = self.make_database(directory)
-            result = build_pipeline_status(
+            result = collect_pipeline_status(
                 path,
                 elasticsearch_documents=123,
             )
@@ -153,7 +155,7 @@ class PipelineStatusTests(unittest.TestCase):
                     """
                 )
 
-            processing_result = build_pipeline_status(path)
+            processing_result = collect_pipeline_status(path)
             self.assertEqual(
                 processing_result["pdf_ocr"]["remaining"],
                 0,
@@ -179,10 +181,83 @@ class PipelineStatusTests(unittest.TestCase):
             path = Path(directory) / "absent.sqlite3"
 
             with self.assertRaises(PipelineStatusUnavailable):
-                build_pipeline_status(path)
+                collect_pipeline_status(path)
 
             self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipelineStatusCacheTests(unittest.TestCase):
+    """
+    Сводка кэшируется на короткое время.
+
+    Она читает таблицу очереди целиком — на рабочем корпусе это около
+    восьмидесяти тысяч строк, порядка 200 мс. Страница поиска опрашивает
+    /pipeline/status каждые 30 секунд, панель управления — каждые 15, и
+    каждая открытая вкладка добавляет свой опрос. Без кэша это
+    постоянный полный скан на общем сервере.
+    """
+
+    def build_database(self, path: Path) -> None:
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE crawl_urls (
+                    url TEXT PRIMARY KEY,
+                    doc_type TEXT,
+                    status TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    indexed_chunks INTEGER DEFAULT 0,
+                    last_indexed_at TEXT,
+                    extraction_version TEXT
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO crawl_urls (url, doc_type, status)"
+                " VALUES ('http://sochi.ru/a', 'html', 'indexed')"
+            )
+
+    def test_second_call_comes_from_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "crawl.sqlite3"
+            self.build_database(path)
+
+            reset_pipeline_status_cache()
+
+            first = build_pipeline_status(path)
+            self.assertEqual(first["crawler"]["total_urls"], 1)
+
+            # База изменилась, но кэш ещё действует.
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "INSERT INTO crawl_urls (url, doc_type, status)"
+                    " VALUES ('http://sochi.ru/b', 'html', 'indexed')"
+                )
+
+            cached = build_pipeline_status(path)
+            self.assertEqual(cached["crawler"]["total_urls"], 1)
+
+            # После сброса — свежие данные.
+            reset_pipeline_status_cache()
+            fresh = build_pipeline_status(path)
+            self.assertEqual(fresh["crawler"]["total_urls"], 2)
+
+    def test_caller_cannot_corrupt_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "crawl.sqlite3"
+            self.build_database(path)
+
+            reset_pipeline_status_cache()
+
+            first = build_pipeline_status(path)
+            first["crawler"]["total_urls"] = 999
+            first["добавлено"] = True
+
+            second = build_pipeline_status(path)
+
+            self.assertEqual(second["crawler"]["total_urls"], 1)
+            self.assertNotIn("добавлено", second)

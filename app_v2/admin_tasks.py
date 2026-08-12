@@ -309,14 +309,26 @@ class TaskRunner:
         if not path.is_file():
             return "Задача ещё не запускалась."
 
+        window = 256_000
+
+        # Читаем именно хвост, а не файл целиком. Журнал долгого обхода —
+        # сотни мегабайт; прежний read_bytes() поднимал его в память
+        # полностью на каждое нажатие «Журнал», а в режиме слежения это
+        # повторялось каждые пять секунд.
         try:
-            data = path.read_bytes()
+            with path.open("rb") as source:
+                size = source.seek(0, os.SEEK_END)
+                source.seek(max(0, size - window))
+                data = source.read()
         except OSError as exc:
             return f"Не удалось прочитать журнал: {exc}"
 
-        # Читаем хвост: журнал может быть большим.
-        text = data[-256_000:].decode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace")
         rows = text.split("\n")
+
+        # Первая строка после смещения почти всегда обрезана посередине.
+        if size > window and len(rows) > 1:
+            rows = rows[1:]
 
         return "\n".join(rows[-lines:])
 

@@ -10,10 +10,13 @@ FastAPI в окружении проверки может отсутствова
 from __future__ import annotations
 
 import ast
+import hashlib
+import os
 import re
 import sys
 import unittest
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE))
@@ -334,3 +337,112 @@ class SessionCookieTests(unittest.TestCase):
         self.assertTrue(
             (SOURCE / "app_v2" / "static" / "admin-login.html").is_file()
         )
+
+
+class AdminUrlValidationTests(unittest.TestCase):
+    """
+    Адрес для переиндексации проверяется по имени узла, а не по началу
+    строки.
+
+    Прежняя проверка `url.startswith("http://sochi.ru")` пропускала
+    `http://sochi.ru@evil.example/` (узел здесь evil.example),
+    `https://sochi.ru.evil.example/` и `https://sochi.ruX`. Задача
+    `reindex_url` скачала бы такой адрес от имени сервера и положила
+    чужой документ в индекс.
+    """
+
+    def allowed_hosts(self):
+        source = (SOURCE / "app_v2" / "admin.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+
+                if target.id != "ALLOWED_HOSTS":
+                    continue
+
+                value = node.value
+
+                # frozenset({...}) — вызов, literal_eval его не берёт.
+                if isinstance(value, ast.Call) and value.args:
+                    value = value.args[0]
+
+                return set(ast.literal_eval(value))
+
+        self.fail("ALLOWED_HOSTS не найден в admin.py")
+
+    def test_startswith_check_is_gone(self) -> None:
+        source = (SOURCE / "app_v2" / "admin.py").read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            'startswith(("http://sochi.ru"',
+            source,
+            msg="вернулась проверка по началу строки — она обходится",
+        )
+        self.assertIn("urlsplit", source)
+
+    def test_hostname_check_rejects_lookalikes(self) -> None:
+        hosts = self.allowed_hosts()
+
+        rejected = [
+            "http://sochi.ru@evil.example/x",
+            "https://sochi.ru.evil.example/x",
+            "https://sochi.ruX",
+            "http://sochi.ru.attacker.tld/",
+            "file:///etc/passwd",
+            "http://127.0.0.1:9200/_all",
+        ]
+
+        for url in rejected:
+            parts = urlsplit(url)
+            passes = (
+                parts.scheme in {"http", "https"}
+                and (parts.hostname or "").lower() in hosts
+            )
+            self.assertFalse(passes, msg=f"проходит проверку: {url}")
+
+        for url in ("http://sochi.ru/doc", "https://www.sochi.ru/a/b"):
+            parts = urlsplit(url)
+            self.assertIn((parts.hostname or "").lower(), hosts, msg=url)
+
+
+class AdminAuthEncodingTests(unittest.TestCase):
+    """
+    Кириллический логин не должен ронять вход.
+
+    `secrets.compare_digest` со строками требует ASCII: на логине
+    «админ» он бросал TypeError, и форма входа отвечала пятисоткой
+    вместо «неверный логин или пароль». Достижимо кем угодно без
+    авторизации — достаточно ввести русское слово.
+    """
+
+    def setUp(self) -> None:
+        self.saved = {
+            key: os.environ.get(key)
+            for key in ("ADMIN_USERNAME", "ADMIN_PASSWORD_SHA256")
+        }
+
+    def tearDown(self) -> None:
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_non_ascii_username_does_not_raise(self) -> None:
+        from app_v2 import admin_auth
+
+        os.environ["ADMIN_USERNAME"] = "админ"
+        os.environ["ADMIN_PASSWORD_SHA256"] = hashlib.sha256(
+            "секрет".encode("utf-8")
+        ).hexdigest()
+
+        self.assertTrue(admin_auth.check_password("админ", "секрет"))
+        self.assertFalse(admin_auth.check_password("админ", "другой"))
+        self.assertFalse(admin_auth.check_password("чужой", "секрет"))
+        self.assertFalse(admin_auth.check_password("admin", "секрет"))
