@@ -1,0 +1,1 @@
+{ path=/usr/bin/flock ; argv[]=/usr/bin/flock --nonblock --conflict-exit-code 75 /opt/sochi-search/run/discovery-worker.lock /opt/sochi-search/.venv/bin/python -m crawler_v2.discovery_worker --max-new 5000 ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }

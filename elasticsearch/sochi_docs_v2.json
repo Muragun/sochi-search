@@ -1,0 +1,203 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "-1",
+    "analysis": {
+      "filter": {
+        "russian_stop": {
+          "type": "stop",
+          "stopwords": "_russian_"
+        },
+        "russian_stemmer": {
+          "type": "stemmer",
+          "language": "russian"
+        }
+      },
+      "analyzer": {
+        "russian_text": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": [
+            "lowercase",
+            "russian_stop",
+            "russian_stemmer"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "chunk_number": {
+        "type": "integer"
+      },
+      "content_type": {
+        "type": "keyword"
+      },
+      "content_category": {
+        "type": "keyword"
+      },
+      "site_section": {
+        "type": "keyword",
+        "ignore_above": 512
+      },
+      "doc_type": {
+        "type": "keyword"
+      },
+      "document_type": {
+        "type": "keyword"
+      },
+      "fetched_at": {
+        "type": "date"
+      },
+      "file_url": {
+        "type": "keyword",
+        "ignore_above": 4096
+      },
+      "hash": {
+        "type": "keyword"
+      },
+      "page_number": {
+        "type": "integer"
+      },
+      "page_url": {
+        "type": "keyword",
+        "ignore_above": 4096
+      },
+      "section": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "headings": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text"
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text"
+      },
+      "body": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text"
+      },
+      "description": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text"
+      },
+      "source": {
+        "type": "keyword"
+      },
+      "text": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text"
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "published_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "sort_date": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "url": {
+        "type": "keyword",
+        "ignore_above": 4096
+      },
+      "document_number": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "document_date": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "document_kind": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "parent_url": {
+        "type": "keyword",
+        "ignore_above": 4096
+      },
+      "attachment_title": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "search_analyzer": "russian_text",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 1024
+          }
+        }
+      },
+      "is_attachment": {
+        "type": "boolean"
+      },
+      "extraction_version": {
+        "type": "keyword"
+      },
+      "text_extraction": {
+        "type": "keyword"
+      },
+      "ocr_used": {
+        "type": "boolean"
+      },
+      "source_page_count": {
+        "type": "integer"
+      },
+      "ocr_page_count": {
+        "type": "integer"
+      },
+      "ocr_attempted_page_count": {
+        "type": "integer"
+      },
+      "ocr_rejected_page_count": {
+        "type": "integer"
+      },
+      "unreadable_page_count": {
+        "type": "integer"
+      }
+    }
+  }
+}

@@ -1,0 +1,254 @@
+# Sochi Search 2.4.5: эксплуатация crawler и PDF OCR
+
+## Веб-панель и API прогресса
+
+- панель: `/ui`;
+- машинный статус: `/pipeline/status`;
+- готовность API: `/health/ready`.
+
+Панель обновляется каждые 30 секунд и только читает SQLite. Основные поля:
+
+- `crawler.loaded_urls` — URL, уже доступные в поиске;
+- `crawler.remaining_urls` — активные URL, ожидающие основной обработки;
+- `crawler.processing_urls` — URL, захваченные прямо сейчас;
+- `elasticsearch.documents` — поисковые фрагменты, а не число URL;
+- `pdf_ocr.completed` — PDF, завершившие `pdf-ocr-v5`;
+- `pdf_ocr.fast_indexed` — PDF уже в поиске через `pdf-native-v1`, но ждут OCR;
+- `pdf_ocr.remaining` — оставшаяся фоновая очередь;
+- `pdf_ocr.processing` — текущий PDF OCR.
+
+```bash
+curl -fsS http://127.0.0.1:18084/health/ready
+curl -fsS http://127.0.0.1:18084/pipeline/status
+```
+
+## Как теперь обрабатывается PDF
+
+### Стадия 1: быстрый основной worker
+
+`sochi-search-worker` не запускает Tesseract. Он извлекает нативный текст,
+реквизиты HTML-карточки и сразу записывает `pdf-native-v1`. Если PyMuPDF не
+завершился за 120 секунд, создаётся безопасный фрагмент по имени/метаданным.
+Документ остаётся доступен поиску и становится кандидатом фонового OCR.
+
+Характерные строки:
+
+```text
+PDF_PROCESS mode=fast timeout_seconds=120 ...
+PDF extraction version: pdf-native-v1
+PDF OCR отложено в фон: <число>
+```
+
+### Стадия 2: отдельный OCR worker
+
+`sochi-search-pdf-ocr.timer` запускает один PDF за раз с низким CPU/IO
+приоритетом. Основной crawler при этом продолжает HTML, DOCX и XLSX.
+
+Пределы по умолчанию:
+
+- `CRAWL_PDF_OCR_DPI=180`;
+- `CRAWL_PDF_OCR_ROTATIONS=0`;
+- `CRAWL_PDF_OCR_PAGE_TIMEOUT_SECONDS=45`;
+- `CRAWL_PDF_OCR_DOCUMENT_BUDGET_SECONDS=360`;
+- `CRAWL_PDF_PROCESS_TIMEOUT_SECONDS=600`;
+- `CRAWL_PDF_OCR_MAX_PAGES=200`.
+
+На первой странице дополнительно проверяются номер, дата и тип правового акта.
+Метаданные связанной официальной HTML-карточки имеют приоритет над эвристикой
+PDF.
+
+Нормальный журнал ограниченного OCR:
+
+```text
+PDF_PROCESS mode=bounded timeout_seconds=600 page_timeout_seconds=45 document_budget_seconds=360
+PDF_PROGRESS page=0/24 stage=opened elapsed_seconds=0
+PDF_PROGRESS page=1/24 readable=1 ocr_attempted=1 ocr_used=1 ...
+PDF_PAGE_TIMEOUT page=5 timeout_seconds=45
+PDF_BUDGET_EXHAUSTED page=10/24 attempted=9 budget_seconds=360
+PDF extraction version: pdf-ocr-v5
+```
+
+`PDF_PAGE_TIMEOUT` и `PDF_BUDGET_EXHAUSTED` не являются аварией worker. Уже
+полученные страницы индексируются, медленные фиксируются как нечитаемые, а
+процесс завершается с `failed: 0`.
+
+## Ручная проверка конкретного PDF
+
+Быстрая стадия:
+
+```bash
+cd /opt/sochi-search || exit 1
+
+PDF_URL="http://sochi.ru/upload/iblock/e9b/e9b6cb5a2a704f1c00ee28226036d64d.pdf"
+
+/usr/bin/flock \
+  --wait 60 \
+  /opt/sochi-search/run/incremental-worker.lock \
+  /opt/sochi-search/.venv/bin/python -B \
+  -m crawler_v2.incremental_worker \
+  --url "$PDF_URL" \
+  --force \
+  --no-http-cache
+```
+
+Ограниченный OCR того же URL:
+
+```bash
+/usr/bin/flock \
+  --wait 60 \
+  /opt/sochi-search/run/pdf-ocr-worker.lock \
+  /opt/sochi-search/.venv/bin/python -B \
+  -m crawler_v2.incremental_worker \
+  --url "$PDF_URL" \
+  --pdf-ocr-backfill \
+  --limit 1
+```
+
+Проверка временных файлов после завершения:
+
+```bash
+find /opt/sochi-search/run/downloads \
+  -maxdepth 1 \
+  -type f \
+  -name 'sochi-search-pdf-*.tmp' \
+  -print
+```
+
+Вывод должен быть пустым. Не удаляйте `.tmp`, пока связанный процесс активен.
+
+## Службы и таймеры
+
+```bash
+systemctl is-active sochi-search-api-v2.service
+systemctl is-active sochi-search-worker.timer
+systemctl is-active sochi-search-discovery.timer
+systemctl is-active sochi-search-publication-date.timer
+systemctl is-active sochi-search-pdf-ocr.timer
+systemctl is-active sochi-search-backup.timer
+systemctl is-active sochi-search-content-cleanup.timer
+```
+
+В штатном режиме первые шесть значений — `active`, одноразовый
+`content-cleanup` — `inactive`.
+
+Запуск всех рабочих таймеров:
+
+```bash
+sudo systemctl enable --now \
+  sochi-search-worker.timer \
+  sochi-search-discovery.timer \
+  sochi-search-publication-date.timer \
+  sochi-search-pdf-ocr.timer
+```
+
+Остановка перед обновлением:
+
+```bash
+sudo systemctl stop \
+  sochi-search-worker.timer \
+  sochi-search-discovery.timer \
+  sochi-search-publication-date.timer \
+  sochi-search-pdf-ocr.timer
+
+sudo systemctl stop \
+  sochi-search-worker.service \
+  sochi-search-discovery.service \
+  sochi-search-publication-date.service \
+  sochi-search-pdf-ocr.service
+```
+
+## Диагностика процессов PDF
+
+```bash
+pgrep -af 'crawler_v2.pdf_(extraction|page_ocr)_worker' \
+  || echo "PDF_CHILD_PROCESSES=0"
+```
+
+После `Ctrl+C` новых версий вывод должен стать пустым. Systemd использует
+`KillMode=control-group`, поэтому остановка service завершает активную страницу
+и контейнерный PDF-процесс вместе.
+
+Журнал:
+
+```bash
+sudo journalctl \
+  -u sochi-search-worker.service \
+  -u sochi-search-pdf-ocr.service \
+  -n 200 \
+  --no-pager \
+  -o short-iso
+```
+
+## Очередь и блокировки
+
+Основной worker планирует партию, но переводит в `processing` только текущий
+URL. OCR service использует отдельный flock, а атомарный claim SQLite не даёт
+двум worker взять одну строку.
+
+Нормально видеть до двух PDF/URL в `processing`: один у основной очереди и
+один у фонового OCR. При старте завершённые локальные PID освобождаются сразу;
+возрастной `CRAWL_LOCK_TIMEOUT_MINUTES` остаётся резервом.
+
+Установщик под обоими lock печатает:
+
+```text
+CRAWLER_PROCESSING_RECOVERED=<число>
+PDF_TEMP_FILES_RECOVERED=<число>
+DEPLOYED_QUEUE_RECOVERY=OK
+DEPLOYED_PDF_TEMP_RECOVERY=OK
+```
+
+## Состояния crawler
+
+- `discovered` — новый URL;
+- `processing` — текущая работа;
+- `indexed`, `indexed_existing`, `unchanged` — доступно в поиске;
+- `retry`, `missing` — временная проблема;
+- `gone`, `quarantined`, `skipped_corrupt`, `skipped_unsupported` —
+  терминальная классификация.
+
+`content-cleanup` является одноразовой очередью и не должна включаться снова.
+Publication-date продолжает работать отдельным таймером.
+
+## Резервные копии
+
+Проверка последнего operational backup:
+
+```bash
+ARCHIVE="$(
+  sudo find /opt/sochi-search/backups/operational \
+    -maxdepth 1 \
+    -type f \
+    -name 'sochi-search-backup-*.tar.gz' \
+    -printf '%T@ %p\n' \
+  | sort -nr \
+  | head -n 1 \
+  | cut -d' ' -f2-
+)"
+
+sudo /opt/sochi-search/.venv/bin/python -B \
+  -m ops.verify_backup "$ARCHIVE"
+```
+
+Ожидается:
+
+```text
+BACKUP_VERIFY=OK
+BACKUP_RELEASE_VERSION=2.4.5
+BACKUP_SQLITE_QUICK_CHECK=ok
+```
+
+Ручной backup:
+
+```bash
+sudo systemctl start sochi-search-backup.service
+sudo journalctl -u sochi-search-backup.service -n 80 --no-pager
+```
+
+## Правила изменения OCR-настроек
+
+Меняйте один параметр за раз и сначала проверяйте один известный PDF. Увеличение
+DPI, числа поворотов или page timeout повышает стоимость почти линейно либо
+квадратично по числу пикселей. Возвращать `0,180,90,270` массово не следует:
+именно четыре последовательных поворота вызвали многоминутные страницы в
+контрольном PDF 56 109 652 байта.

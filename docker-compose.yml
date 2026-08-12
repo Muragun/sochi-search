@@ -1,0 +1,55 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.17
+    container_name: sochi-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.autoconfiguration.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      # Heap задаётся в .env одной строкой ES_HEAP. Правило: половина
+      # памяти машины, но не больше 30 ГБ. Xms и Xmx всегда равны —
+      # растущий heap вызывает паузы сборщика мусора на ровном месте.
+      ES_JAVA_OPTS: "-Xms${ES_HEAP:-2g} -Xmx${ES_HEAP:-2g}"
+
+      # Каталог для снимков индекса. Нужен при переезде на другую
+      # машину: снимок делается сюда, том целиком копируется, на новой
+      # машине из него восстанавливается индекс.
+      # См. docs/DEPLOY.md, раздел «Перенос данных».
+      path.repo: /snapshots
+
+    # Сервер общий: рядом работают PHP-FPM, MariaDB и Node. Без предела
+    # контейнер занимает heap плюс столько же вне heap и вытесняет соседей
+    # в swap. Предел держим примерно в полтора раза больше heap: остаток
+    # уходит под файловый кэш Lucene, без которого поиск идёт с диска.
+    mem_limit: ${ES_MEM_LIMIT:-3g}
+    memswap_limit: ${ES_MEM_LIMIT:-3g}
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - essnapshots:/snapshots
+
+    # Общая сеть с приложением. Без неё контейнеры оказываются в разных
+    # сетях, и имя elasticsearch из ES_URL не разрешается: приложение
+    # ждёт кластер, которого «не видит», хотя тот запущен.
+    networks:
+      - search
+
+volumes:
+  esdata:
+  essnapshots:
+
+networks:
+  search:
+    name: sochi-search

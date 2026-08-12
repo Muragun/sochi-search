@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+*.pyc
+data
+run
+backups
+var
+docs
+tests/__pycache__
+*.tar.gz
+.env
+.env.*
+!.env.example
+!.env.production.example

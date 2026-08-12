@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+    <meta
+        name="description"
+        content="Внутренний поиск по страницам и документам сайта города Сочи"
+    >
+    <meta name="theme-color" content="#145da0">
+
+    <title>Поиск по документам Сочи</title>
+
+    <link
+        rel="stylesheet"
+        href="/assets/search.css?v=9"
+    >
+    <script
+        src="/assets/search.js?v=9"
+        defer
+    ></script>
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="topbar__inner">
+            <a class="brand" href="/ui" aria-label="На главную поиска">
+                <span class="brand__mark" aria-hidden="true">С</span>
+
+                <span>
+                    <span class="brand__title">Поиск по документам</span>
+                    <span class="brand__subtitle">Внутренняя поисковая система</span>
+                </span>
+            </a>
+
+            <div
+                id="system-status"
+                class="system-status"
+                aria-live="polite"
+            >
+                <span
+                    id="status-dot"
+                    class="status-dot status-dot--loading"
+                    aria-hidden="true"
+                ></span>
+                <span id="status-text">Проверка системы…</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="page">
+        <section class="hero" aria-labelledby="page-title">
+            <p class="eyebrow">Единый внутренний поиск</p>
+            <h1 id="page-title">Поиск по сайту города Сочи</h1>
+            <p class="hero__description">
+                Находите страницы, новости, нормативные акты и PDF-файлы
+                по тексту, номеру документа, разделу и дате.
+            </p>
+        </section>
+
+        <section
+            id="pipeline-panel"
+            class="pipeline-panel"
+            aria-labelledby="pipeline-title"
+            aria-busy="true"
+        >
+            <div class="pipeline-panel__header">
+                <div>
+                    <p class="eyebrow">Загрузка данных</p>
+                    <h2 id="pipeline-title">Состояние поискового индекса</h2>
+                    <p id="pipeline-updated" class="pipeline-updated">
+                        Получение актуальных данных…
+                    </p>
+                </div>
+
+                <button
+                    id="pipeline-refresh"
+                    class="button button--secondary pipeline-refresh"
+                    type="button"
+                >
+                    Обновить
+                </button>
+            </div>
+
+            <div class="pipeline-progress">
+                <div class="pipeline-progress__labels">
+                    <strong id="pipeline-progress-label">Обработано 0%</strong>
+                    <span id="pipeline-progress-detail">Подготовка статистики</span>
+                </div>
+                <div
+                    id="pipeline-progressbar"
+                    class="pipeline-progressbar"
+                    role="progressbar"
+                    aria-label="Первичная обработка найденных URL"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow="0"
+                >
+                    <span id="pipeline-progress-fill"></span>
+                </div>
+            </div>
+
+            <div class="pipeline-metrics" aria-live="polite">
+                <div class="pipeline-metric">
+                    <span class="pipeline-metric__label">Найдено URL</span>
+                    <strong id="pipeline-total">—</strong>
+                </div>
+                <div class="pipeline-metric pipeline-metric--success">
+                    <span class="pipeline-metric__label">Загружено в поиск</span>
+                    <strong id="pipeline-loaded">—</strong>
+                </div>
+                <div class="pipeline-metric pipeline-metric--warning">
+                    <span class="pipeline-metric__label">Осталось обработать</span>
+                    <strong id="pipeline-remaining">—</strong>
+                </div>
+                <div class="pipeline-metric">
+                    <span class="pipeline-metric__label">Сейчас в работе</span>
+                    <strong id="pipeline-processing">—</strong>
+                </div>
+                <div class="pipeline-metric">
+                    <span class="pipeline-metric__label">Фрагментов в Elasticsearch</span>
+                    <strong id="pipeline-documents">—</strong>
+                </div>
+                <div class="pipeline-metric pipeline-metric--problem">
+                    <span class="pipeline-metric__label">Требуют внимания</span>
+                    <strong id="pipeline-problems">—</strong>
+                </div>
+            </div>
+
+            <details class="pipeline-details">
+                <summary>Подробности по форматам и очередям</summary>
+
+                <div class="pipeline-table-wrap">
+                    <table class="pipeline-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Формат</th>
+                                <th scope="col">Всего</th>
+                                <th scope="col">Загружено</th>
+                                <th scope="col">Осталось</th>
+                                <th scope="col">В работе</th>
+                                <th scope="col">Терминально</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pipeline-formats"></tbody>
+                    </table>
+                </div>
+
+                <div class="pipeline-queues">
+                    <article class="pipeline-queue">
+                        <h3>Даты публикаций</h3>
+                        <p id="pipeline-publication">—</p>
+                    </article>
+                    <article class="pipeline-queue">
+                        <h3>Очистка содержимого</h3>
+                        <p id="pipeline-cleanup">—</p>
+                    </article>
+                    <article class="pipeline-queue">
+                        <h3>Распознавание PDF</h3>
+                        <p id="pipeline-pdf-ocr">—</p>
+                    </article>
+                    <article class="pipeline-queue">
+                        <h3>Последний discovery</h3>
+                        <p id="pipeline-discovery">—</p>
+                    </article>
+                </div>
+            </details>
+
+            <p
+                id="pipeline-error"
+                class="pipeline-error"
+                role="status"
+                hidden
+            ></p>
+        </section>
+
+        <form
+            id="search-form"
+            class="search-panel"
+            role="search"
+            novalidate
+        >
+            <div class="main-search">
+                <label class="sr-only" for="query">Поисковый запрос</label>
+                <input
+                    id="query"
+                    name="q"
+                    class="main-search__input"
+                    type="search"
+                    maxlength="300"
+                    placeholder="Например: благоустройство территории или 30-р"
+                    autocomplete="off"
+                    enterkeyhint="search"
+                    aria-describedby="search-hint"
+                >
+
+                <button
+                    id="search-button"
+                    class="button button--primary"
+                    type="submit"
+                >
+                    Найти
+                </button>
+
+                <button
+                    id="answer-button"
+                    class="button button--secondary button--answer"
+                    type="button"
+                    disabled
+                    title="Составить краткую выдержку из найденных материалов"
+                >
+                    Краткий ответ
+                </button>
+            </div>
+
+            <p id="search-hint" class="search-hint">
+                Для обычного поиска достаточно двух символов. Также можно
+                искать без текста — только по одному или нескольким фильтрам.
+            </p>
+
+            <section
+                id="recent-searches"
+                class="recent-searches"
+                aria-label="Недавние запросы"
+                hidden
+            ></section>
+
+            <details id="filters-panel" class="filters">
+                <summary>
+                    <span>Расширенные фильтры</span>
+                    <span
+                        id="filter-count"
+                        class="filter-count"
+                        hidden
+                    ></span>
+                </summary>
+
+                <div class="filters__grid">
+                    <label class="field">
+                        <span class="field__label">Номер документа</span>
+                        <input
+                            id="document-number"
+                            name="document_number"
+                            type="text"
+                            maxlength="100"
+                            placeholder="30-р"
+                        >
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Раздел сайта</span>
+                        <select id="content-category" name="content_category">
+                            <option value="">Все разделы</option>
+                            <option value="news">Новости</option>
+                            <option value="legal">Нормативные акты</option>
+                            <option value="announcement">Объявления</option>
+                            <option value="media">Медиагалерея</option>
+                            <option value="press">Вся пресс-служба</option>
+                            <option value="city_authority">Городская власть</option>
+                            <option value="city_life">Жизнь города</option>
+                            <option value="city">О городе</option>
+                            <option value="events">Афиша и мероприятия</option>
+                            <option value="file">Файлы и PDF</option>
+                            <option value="page">Остальные страницы сайта</option>
+                            <option value="legacy">Архивные разделы</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Вид документа</span>
+                        <select id="document-kind" name="document_kind">
+                            <option value="">Все виды</option>
+                            <option value="Постановление">Постановление</option>
+                            <option value="Распоряжение">Распоряжение</option>
+                            <option value="Решение">Решение</option>
+                            <option value="Приказ">Приказ</option>
+                            <option value="Положение">Положение</option>
+                            <option value="Извещение">Извещение</option>
+                            <option value="Протокол">Протокол</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Дата от</span>
+                        <input id="date-from" name="date_from" type="date">
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Дата до</span>
+                        <input id="date-to" name="date_to" type="date">
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Тип результата</span>
+                        <select id="result-type" name="result_type">
+                            <option value="">Все результаты</option>
+                            <option value="page">Страницы сайта</option>
+                            <option value="pdf">PDF-документы</option>
+                            <option value="file">DOCX, XLSX, TXT и CSV</option>
+                            <option value="attachment">Только вложения</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Сортировка</span>
+                        <select id="sort" name="sort">
+                            <option value="relevance">По релевантности</option>
+                            <option value="date_desc">Сначала новые</option>
+                            <option value="date_asc">Сначала старые</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span class="field__label">Результатов на странице</span>
+                        <select id="limit" name="limit">
+                            <option value="10">10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="filters__actions">
+                    <button
+                        id="reset-button"
+                        class="button button--secondary"
+                        type="button"
+                    >
+                        Сбросить всё
+                    </button>
+                </div>
+            </details>
+        </form>
+
+        <nav
+            id="active-filters"
+            class="active-filters"
+            aria-label="Активные фильтры"
+            hidden
+        ></nav>
+
+        <section
+            id="message"
+            class="message"
+            hidden
+            aria-live="polite"
+        ></section>
+
+        <section
+            id="answer-panel"
+            class="answer-panel"
+            aria-labelledby="answer-title"
+            aria-live="polite"
+            hidden
+        >
+            <div class="answer-panel__header">
+                <div>
+                    <p class="answer-panel__kicker">По материалам индекса</p>
+                    <h2 id="answer-title">Краткий ответ</h2>
+                </div>
+
+                <button
+                    id="answer-close"
+                    class="icon-button"
+                    type="button"
+                    aria-label="Закрыть краткий ответ"
+                >
+                    ×
+                </button>
+            </div>
+
+            <div id="answer-content" class="answer-panel__content"></div>
+        </section>
+
+        <nav
+            id="facet-tabs"
+            class="facet-tabs"
+            aria-label="Разделы результатов"
+            hidden
+        ></nav>
+
+        <section id="search-meta" class="search-meta" hidden>
+            <div id="search-summary"></div>
+
+            <button
+                id="export-button"
+                class="button button--secondary export-button"
+                type="button"
+                hidden
+            >
+                Скачать CSV
+            </button>
+        </section>
+
+        <section
+            id="results"
+            class="results"
+            aria-live="polite"
+            aria-busy="false"
+        ></section>
+
+        <nav
+            id="pagination"
+            class="pagination"
+            aria-label="Страницы результатов"
+            hidden
+        >
+            <button
+                id="previous-page"
+                class="button button--secondary pagination__edge"
+                type="button"
+            >
+                Назад
+            </button>
+
+            <div
+                id="pagination-pages"
+                class="pagination__pages"
+            ></div>
+
+            <button
+                id="next-page"
+                class="button button--secondary pagination__edge"
+                type="button"
+            >
+                Далее
+            </button>
+
+            <span id="page-info" class="pagination__info"></span>
+        </nav>
+
+        <noscript>
+            <div class="message message--error">
+                Для работы интерфейса необходимо включить JavaScript.
+            </div>
+        </noscript>
+    </main>
+
+    <footer class="footer">
+        <div>Внутренний поиск по индексу Elasticsearch · версия 2.5</div>
+        <div class="footer__links">
+            <a href="/docs">API</a>
+            <a href="/health/ready">Состояние</a>
+            <a href="/pipeline/status">Загрузка</a>
+        </div>
+    </footer>
+</body>
+</html>

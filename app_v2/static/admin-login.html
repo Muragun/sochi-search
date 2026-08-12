@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Вход в управление — Поиск Сочи</title>
+    <link rel="stylesheet" href="/assets/search.css?v=10">
+    <link rel="stylesheet" href="/assets/admin.css?v=10">
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar__inner">
+        <a class="brand" href="/ui" aria-label="К поиску">
+            <span class="brand__mark" aria-hidden="true">С</span>
+            <span>
+                <span class="brand__title">Управление поиском</span>
+                <span class="brand__subtitle">Служебный раздел</span>
+            </span>
+        </a>
+    </div>
+</header>
+
+<main class="page login-page">
+    <form class="login-card" method="post" action="/admin/login">
+        <h1 class="login-title">Вход</h1>
+
+        <p class="login-note">
+            Раздел управления доступен только сотрудникам, отвечающим за
+            работу поиска. Сам поиск открыт всем и входа не требует.
+        </p>
+
+        <p id="login-error" class="admin-error" hidden>
+            Неверный логин или пароль.
+        </p>
+
+        <label class="login-field">
+            <span>Логин</span>
+            <input
+                type="text"
+                name="username"
+                autocomplete="username"
+                autofocus
+                required
+            >
+        </label>
+
+        <label class="login-field">
+            <span>Пароль</span>
+            <input
+                type="password"
+                name="password"
+                autocomplete="current-password"
+                required
+            >
+        </label>
+
+        <button type="submit" class="btn-primary login-submit">Войти</button>
+
+        <a class="login-back" href="/ui">Вернуться к поиску</a>
+    </form>
+</main>
+
+<script>
+    // Признак ошибки приходит параметром адреса; никакого содержимого из
+    // него в разметку не попадает.
+    if (new URLSearchParams(window.location.search).has("error")) {
+        document.getElementById("login-error").hidden = false;
+    }
+</script>
+
+</body>
+</html>

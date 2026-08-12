@@ -1,0 +1,42 @@
+# Секреты. Рабочий .env содержит хеш пароля и в git не попадает.
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Состояние, а не код
+data/
+run/
+backups/
+logs/
+var/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+
+# Следы прежних установок на рабочем сервере. Перечислены явно, потому
+# что репозиторий создаётся прямо в рабочем каталоге: там рядом с кодом
+# лежат копии файлов, оставленные установщиком.
+*.backup-*
+*.bak-*
+*.before-*
+.release-*
+docker-compose.yml.new
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Сборки
+*.tar.gz
+*.tar.gz.sha256
+dist/
+build/
+
+# Редакторы
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,26 @@
+[Unit]
+Description=Sochi Search consistent operational backup
+Documentation=file:/opt/sochi-search/OPERATIONS.md
+After=local-fs.target
+ConditionPathExists=/opt/sochi-search/data/crawl_state.sqlite3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/sochi-search
+ExecStart=/opt/sochi-search/.venv/bin/python -B -m ops.backup
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+# SQLite opens the live database read-only, but a WAL database still needs
+# access to its -wal/-shm sidecars and locking in the data directory.
+ReadWritePaths=/opt/sochi-search/backups /opt/sochi-search/data
+NoNewPrivileges=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX

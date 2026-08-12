@@ -1,0 +1,61 @@
+[Unit]
+Description=Sochi Search bounded background PDF OCR worker (слот %i)
+Wants=docker.service network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+
+User=komardin
+Group=komardin
+
+WorkingDirectory=/opt/sochi-search
+EnvironmentFile=/opt/sochi-search/.env.crawler
+Environment=PYTHONUNBUFFERED=1
+
+# Tesseract собран с OpenMP. Без этого предела один процесс занимает все
+# ядра, два слота начинают конкурировать за них, и суммарная пропускная
+# способность оказывается ниже, чем у одного слота.
+Environment=OMP_THREAD_LIMIT=1
+
+ExecStartPre=/usr/bin/test -r /opt/sochi-search/.env.crawler
+ExecStartPre=/usr/bin/test -x /opt/sochi-search/.venv/bin/python
+ExecStartPre=/usr/bin/test -x /usr/bin/tesseract
+ExecStartPre=/opt/sochi-search/.venv/bin/python -B -m ops.wait_for_elasticsearch --timeout 240 --interval 2 --request-timeout 8
+
+# Каждый слот берёт свой lock: параллельно работают разные слоты, но один и
+# тот же слот не запускается дважды. Аренда URL в SQLite не даёт двум слотам
+# взять один документ.
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 75 \
+    /opt/sochi-search/run/pdf-ocr-worker-%i.lock \
+    /opt/sochi-search/.venv/bin/python -B -m crawler_v2.incremental_worker \
+        --pdf-ocr-backfill \
+        --batch \
+        --worker-slot %i \
+        --no-http-cache
+
+SuccessExitStatus=75
+
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
+
+MemoryMax=700M
+TasksMax=64
+
+KillMode=control-group
+TimeoutStartSec=25min
+TimeoutStopSec=30s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sochi-search/run /opt/sochi-search/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sochi-search-pdf-ocr-%i
+
+[Install]
+WantedBy=multi-user.target

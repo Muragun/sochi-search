@@ -1,0 +1,119 @@
+# Приложение в контейнерах. Elasticsearch остаётся снаружи.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d
+#
+# Переменные берутся из .env рядом с этим файлом. Обязательные:
+#   ES_URL, ADMIN_USERNAME, ADMIN_PASSWORD_SHA256
+
+# Пути внутри контейнера вынесены в отдельный якорь и подмешиваются
+# ВНУТРЬ environment каждого сервиса.
+#
+# Так сделано намеренно: YAML-слияние `<<: *app` заменяет блок
+# environment целиком, а не дополняет его. Если сервис объявляет хотя бы
+# одну свою переменную, все переменные якоря пропадают, и значения
+# подхватываются из .env — с путями хост-системы вместо контейнерных.
+x-container-env: &container-env
+  ES_URL: "${ES_URL:-http://elasticsearch:9200}"
+  ES_INDEX: "${ES_INDEX:-sochi_search}"
+  CRAWL_STATE_DB: /app/data/crawl_state.sqlite3
+  CRAWL_DOWNLOAD_TEMP_DIR: /app/run/downloads
+  CRAWL_PDF_OCR_CACHE_DIR: /app/run/pdf-cache
+  CRAWL_PDF_OCR_TESSDATA: /app/ocr/tessdata
+  ADMIN_TASK_DIR: /app/run/admin-tasks
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: sochi-search-app:2.5.0
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    <<: *container-env
+  volumes:
+    - state:/app/data
+    - runtime:/app/run
+    - backups:/app/backups
+  networks:
+    - search
+  depends_on:
+    - elasticsearch
+
+services:
+
+  api:
+    <<: *app
+    container_name: sochi-search-api
+    command: ["api"]
+    environment:
+      <<: *container-env
+      # Внутри контейнера слушаем все адреса: наружу отдаёт только
+      # проброс порта ниже. Значение APP_HOST из .env здесь неприменимо —
+      # там адрес хост-системы.
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+    ports:
+      # Наружу отдаём только на конкретный адрес, а не на 0.0.0.0.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-18084}:8000"
+    mem_limit: 512m
+
+  worker:
+    <<: *app
+    container_name: sochi-search-worker
+    command: ["worker"]
+    mem_limit: 900m
+
+  discovery:
+    <<: *app
+    container_name: sochi-search-discovery
+    command: ["discovery"]
+    mem_limit: 512m
+
+  ocr-1:
+    <<: *app
+    container_name: sochi-search-ocr-1
+    command: ["ocr"]
+    environment:
+      <<: *container-env
+      OCR_SLOT: "1"
+    mem_limit: 700m
+    cpus: 1.0
+
+  ocr-2:
+    <<: *app
+    container_name: sochi-search-ocr-2
+    command: ["ocr"]
+    environment:
+      <<: *container-env
+      OCR_SLOT: "2"
+    mem_limit: 700m
+    cpus: 1.0
+
+  publication-date:
+    <<: *app
+    container_name: sochi-search-publication-date
+    command: ["publication-date"]
+    mem_limit: 400m
+
+  content-cleanup:
+    <<: *app
+    container_name: sochi-search-content-cleanup
+    command: ["content-cleanup"]
+    mem_limit: 400m
+
+  backup:
+    <<: *app
+    container_name: sochi-search-backup
+    command: ["backup"]
+    mem_limit: 300m
+
+volumes:
+  state:
+  runtime:
+  backups:
+
+networks:
+  search:
+    name: sochi-search

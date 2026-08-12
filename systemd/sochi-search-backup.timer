@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily Sochi Search operational backup
+Documentation=file:/opt/sochi-search/OPERATIONS.md
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=sochi-search-backup.service
+
+[Install]
+WantedBy=timers.target
+
