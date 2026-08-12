@@ -97,11 +97,6 @@ services:
     command: ["publication-date"]
     mem_limit: 400m
 
-  content-cleanup:
-    <<: *app
-    container_name: sochi-search-content-cleanup
-    command: ["content-cleanup"]
-    mem_limit: 400m
 
   backup:
     <<: *app

@@ -71,8 +71,10 @@ a:hover {
     color: var(--primary-dark);
 }
 
+/* Полупрозрачный контур давал контраст около 1,55:1 при требуемых 3:1 —
+   при переходе по Tab было не видно, где курсор. Сплошной цвет решает. */
 :focus-visible {
-    outline: 3px solid rgba(20, 93, 160, 0.28);
+    outline: 3px solid var(--primary);
     outline-offset: 2px;
 }
 
@@ -406,11 +408,12 @@ h1 {
     border-radius: 10px;
     color: var(--text);
     background: var(--surface);
-    outline: none;
+    /* outline не снимаем: это единственный признак фокуса
+       при работе с клавиатуры */
 }
 
 .main-search__input::placeholder {
-    color: #7a8793;
+    color: #6b7680;
 }
 
 .main-search__input:focus,
@@ -571,7 +574,8 @@ h1 {
     border-radius: 8px;
     color: var(--text);
     background: var(--surface);
-    outline: none;
+    /* outline не снимаем: это единственный признак фокуса
+       при работе с клавиатуры */
 }
 
 .active-filters {
@@ -1230,10 +1234,8 @@ mark {
  * индекса. Панель сворачивается до одной строки и разворачивается
  * щелчком.
  */
-.pipeline-panel.pipeline-panel--collapsed .pipeline-panel__body,
 .pipeline-panel.pipeline-panel--collapsed .pipeline-progress,
 .pipeline-panel.pipeline-panel--collapsed .pipeline-metrics,
-.pipeline-panel.pipeline-panel--collapsed .pipeline-panel__meta,
 .pipeline-panel.pipeline-panel--collapsed .pipeline-details,
 .pipeline-panel.pipeline-panel--collapsed #pipeline-refresh {
     display: none;
@@ -1256,7 +1258,7 @@ mark {
 .pipeline-panel__toggle {
     background: none;
     border: 0;
-    color: var(--color-link, #1b5fa8);
+    color: var(--primary);
     cursor: pointer;
     font: inherit;
     font-size: 0.85rem;

@@ -36,13 +36,9 @@ REQUIRED_WIRING = {
 # Модули, про которые известно, что они не используются. Список
 # намеренно явный: он не даёт тесту молча пропустить новые такие случаи.
 #
-# attachment_links_db — слой доступа к таблице attachment_links. Ни точкой
-# входа, ни импортируемым модулем не является: url_deduplicate работает с
-# той же таблицей напрямую через SQL. 342 строки мёртвого кода, оставлены
-# как есть, чтобы не менять поведение перед установкой.
-KNOWN_UNUSED = {
-    "crawler_v2.attachment_links_db",
-}
+# Сейчас пуст: разовые аудиты и бэкфиллы, кампании которых закончены,
+# удалены из репозитория. История правок остаётся в git.
+KNOWN_UNUSED: set = set()
 
 # Модули-точки входа: у них нет импортёров по определению.
 ENTRY_POINTS = {
@@ -51,19 +47,11 @@ ENTRY_POINTS = {
     "crawler_v2.discovery_worker_v2",
     "crawler_v2.content_cleanup_worker",
     "crawler_v2.publication_date_worker",
-    "crawler_v2.legal_backfill_worker",
     "crawler_v2.pdf_extraction_worker",
     "crawler_v2.pdf_page_ocr_worker",
     "crawler_v2.pdf_ocr_state",
     "crawler_v2.bootstrap_state",
     "crawler_v2.data_maintenance",
-    "crawler_v2.url_audit",
-    "crawler_v2.url_deduplicate",
-    "crawler_v2.url_duplicate_verify",
-    "crawler_v2.legal_audit",
-    "crawler_v2.html_structure_audit",
-    "crawler_v2.legal_backfill_report",
-    "crawler_v2.worker_report",
     "crawler_v2.state_stats",
     "app_v2.main",
     "ops.backup",
@@ -71,6 +59,7 @@ ENTRY_POINTS = {
     "ops.wait_for_elasticsearch",
     "ops.validate_elasticsearch",
     "ops.reindex_v3",
+    "ops.init_state",
 }
 
 

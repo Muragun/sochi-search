@@ -41,7 +41,7 @@ PDF OCR отложено в фон: <число>
 
 ### Стадия 2: отдельный OCR worker
 
-`sochi-search-pdf-ocr.timer` запускает один PDF за раз с низким CPU/IO
+`sochi-search-pdf-ocr@1.timer` запускает один PDF за раз с низким CPU/IO
 приоритетом. Основной crawler при этом продолжает HTML, DOCX и XLSX.
 
 Пределы по умолчанию:
@@ -123,13 +123,17 @@ systemctl is-active sochi-search-api-v2.service
 systemctl is-active sochi-search-worker.timer
 systemctl is-active sochi-search-discovery.timer
 systemctl is-active sochi-search-publication-date.timer
-systemctl is-active sochi-search-pdf-ocr.timer
+systemctl is-active sochi-search-pdf-ocr@1.timer
 systemctl is-active sochi-search-backup.timer
-systemctl is-active sochi-search-content-cleanup.timer
 ```
 
-В штатном режиме первые шесть значений — `active`, одноразовый
-`content-cleanup` — `inactive`.
+В штатном режиме все значения — `active`.
+
+Служба `content-cleanup` удалена в 2.5.0: её очередь была одноразовой и
+отработала полностью (26577 из 26577). Если на машине остался её таймер,
+он больше не нужен:
+
+    sudo systemctl disable --now sochi-search-content-cleanup.timer
 
 Запуск всех рабочих таймеров:
 
@@ -138,7 +142,7 @@ sudo systemctl enable --now \
   sochi-search-worker.timer \
   sochi-search-discovery.timer \
   sochi-search-publication-date.timer \
-  sochi-search-pdf-ocr.timer
+  sochi-search-pdf-ocr@1.timer
 ```
 
 Остановка перед обновлением:
@@ -148,13 +152,13 @@ sudo systemctl stop \
   sochi-search-worker.timer \
   sochi-search-discovery.timer \
   sochi-search-publication-date.timer \
-  sochi-search-pdf-ocr.timer
+  sochi-search-pdf-ocr@1.timer
 
 sudo systemctl stop \
   sochi-search-worker.service \
   sochi-search-discovery.service \
   sochi-search-publication-date.service \
-  sochi-search-pdf-ocr.service
+  sochi-search-pdf-ocr@1.service
 ```
 
 ## Диагностика процессов PDF
@@ -173,7 +177,7 @@ pgrep -af 'crawler_v2.pdf_(extraction|page_ocr)_worker' \
 ```bash
 sudo journalctl \
   -u sochi-search-worker.service \
-  -u sochi-search-pdf-ocr.service \
+  -u sochi-search-pdf-ocr@1.service \
   -n 200 \
   --no-pager \
   -o short-iso
@@ -207,7 +211,7 @@ DEPLOYED_PDF_TEMP_RECOVERY=OK
 - `gone`, `quarantined`, `skipped_corrupt`, `skipped_unsupported` —
   терминальная классификация.
 
-`content-cleanup` является одноразовой очередью и не должна включаться снова.
+`content-cleanup` удалена в 2.5.0: очередь отработала полностью.
 Publication-date продолжает работать отдельным таймером.
 
 ## Резервные копии

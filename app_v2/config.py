@@ -33,17 +33,6 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
-def env_list(name: str, default: str) -> tuple[str, ...]:
-    """Преобразует строку через запятую в кортеж."""
-    raw_value = os.getenv(name, default)
-
-    return tuple(
-        value.strip()
-        for value in raw_value.split(",")
-        if value.strip()
-    )
-
-
 @dataclass(frozen=True)
 class Settings:
     es_url: str
@@ -51,9 +40,8 @@ class Settings:
     es_username: str
     es_password: str
     es_verify_tls: bool
-
-    search_fields: tuple[str, ...]
-    search_source_fields: tuple[str, ...]
+    es_connect_timeout: int
+    es_read_timeout: int
 
     search_default_limit: int
     search_max_limit: int
@@ -87,18 +75,19 @@ settings = Settings(
         True,
     ),
 
-    search_fields=env_list(
-        "SEARCH_FIELDS",
-        "title^5,headings^3,text,content,body",
+    es_connect_timeout=env_int(
+        "ES_CONNECT_TIMEOUT",
+        5,
     ),
 
-    search_source_fields=env_list(
-        "SEARCH_SOURCE_FIELDS",
-        (
-            "url,title,text,content,body,headings,"
-            "document_type,page_number,published_at"
-        ),
+    # Дольше пользователь всё равно не ждёт: он перезагружает страницу, а
+    # запрос продолжает занимать поток из пула.
+    es_read_timeout=env_int(
+        "ES_READ_TIMEOUT",
+        10,
     ),
+
+
 
     search_default_limit=env_int(
         "SEARCH_DEFAULT_LIMIT",

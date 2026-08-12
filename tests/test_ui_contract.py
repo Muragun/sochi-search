@@ -57,15 +57,50 @@ class SearchUiContractTests(unittest.TestCase):
             "pipeline-problems",
             "pipeline-formats",
             "pipeline-publication",
-            "pipeline-cleanup",
             "pipeline-pdf-ocr",
             "pipeline-discovery",
         }
         self.assertTrue(required.issubset(set(parser.ids)))
 
     def test_static_asset_version_is_consistent(self) -> None:
-        self.assertIn("/assets/search.css?v=9", self.html)
-        self.assertIn("/assets/search.js?v=9", self.html)
+        """
+        Все страницы ссылаются на статику одной и той же версии.
+
+        Проверяется совпадение, а не конкретное число: раньше здесь было
+        зашито `v=9`, и тест краснел при каждой правке стилей, ничего не
+        проверяя по существу. При этом настоящая проблема — когда
+        index.html грузит `search.css?v=9`, а admin.html тот же файл под
+        `?v=10` — оставалась незамеченной: браузер держал две копии, и
+        после следующей правки страница поиска молча получала старую.
+        """
+
+        import re
+
+        versions = {}
+
+        for name in ("index.html", "admin.html", "admin-login.html"):
+            page = (STATIC_DIR / name).read_text(
+                encoding="utf-8"
+            )
+
+            for asset, version in re.findall(
+                r"/assets/([a-z-]+\.(?:css|js))\?v=(\d+)", page
+            ):
+                versions.setdefault(asset, set()).add(version)
+
+        self.assertTrue(versions, msg="ссылок на статику не найдено")
+
+        mixed = {
+            asset: sorted(found)
+            for asset, found in versions.items()
+            if len(found) > 1
+        }
+
+        self.assertEqual(
+            mixed,
+            {},
+            msg=f"один файл запрашивается под разными версиями: {mixed}",
+        )
 
     def test_client_avoids_untrusted_html_injection(self) -> None:
         self.assertNotIn("innerHTML", self.javascript)

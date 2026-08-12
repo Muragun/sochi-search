@@ -96,7 +96,6 @@ const elements = {
     pipelineProblems: document.getElementById("pipeline-problems"),
     pipelineFormats: document.getElementById("pipeline-formats"),
     pipelinePublication: document.getElementById("pipeline-publication"),
-    pipelineCleanup: document.getElementById("pipeline-cleanup"),
     pipelinePdfOcr: document.getElementById("pipeline-pdf-ocr"),
     pipelineDiscovery: document.getElementById("pipeline-discovery"),
     pipelineError: document.getElementById("pipeline-error"),
@@ -1211,7 +1210,9 @@ function goToPage(page) {
     state.offset = nextOffset;
     clearAnswer();
     runSearch(true);
-    elements.searchMeta.scrollIntoView({behavior: "smooth", block: "start"});
+    // Прокручиваем к результатам, а не к строке итога: та скрыта, пока
+    // идёт запрос, и scrollIntoView на скрытом элементе не делает ничего.
+    elements.results.scrollIntoView({behavior: "smooth", block: "start"});
 }
 
 
@@ -1813,7 +1814,6 @@ function renderPipelineStatus(payload) {
 
     renderPipelineFormats(crawler.formats);
     elements.pipelinePublication.textContent = pipelineQueueText(payload.publication_date);
-    elements.pipelineCleanup.textContent = pipelineQueueText(payload.content_cleanup);
     elements.pipelinePdfOcr.textContent = pipelinePdfOcrText(payload.pdf_ocr);
 
     const discovery = payload.latest_discovery;
@@ -1934,7 +1934,9 @@ elements.previousPage.addEventListener("click", () => {
     state.offset = Math.max(0, state.offset - state.limit);
     clearAnswer();
     runSearch(true);
-    elements.searchMeta.scrollIntoView({behavior: "smooth", block: "start"});
+    // Прокручиваем к результатам, а не к строке итога: та скрыта, пока
+    // идёт запрос, и scrollIntoView на скрытом элементе не делает ничего.
+    elements.results.scrollIntoView({behavior: "smooth", block: "start"});
 });
 
 elements.nextPage.addEventListener("click", () => {
@@ -1948,7 +1950,9 @@ elements.nextPage.addEventListener("click", () => {
     state.offset += state.limit;
     clearAnswer();
     runSearch(true);
-    elements.searchMeta.scrollIntoView({behavior: "smooth", block: "start"});
+    // Прокручиваем к результатам, а не к строке итога: та скрыта, пока
+    // идёт запрос, и scrollIntoView на скрытом элементе не делает ничего.
+    elements.results.scrollIntoView({behavior: "smooth", block: "start"});
 });
 
 window.addEventListener("popstate", () => {

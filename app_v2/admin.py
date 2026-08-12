@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
@@ -51,6 +53,19 @@ from .pipeline_status import PipelineStatusUnavailable, build_pipeline_status
 # Оба вида адресов заставили бы сервер сходить наружу и положить чужой
 # документ в индекс.
 ALLOWED_HOSTS = frozenset({"sochi.ru", "www.sochi.ru"})
+
+logger = logging.getLogger("sochi_search.admin")
+
+# Задержка после неудачного входа.
+#
+# Пароль один на всех, хранится несолёным SHA-256, канал внутри сети
+# обычный http. Ограничения частоты не было вовсе: перебор упирался
+# только в скорость сети. Задержка растёт с числом неудач подряд и
+# сбрасывается при успешном входе.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_DELAY_SECONDS = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+_login_failures: Dict[str, int] = {}
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -134,9 +149,19 @@ def login_page() -> FileResponse:
 
 @router.post("/login", include_in_schema=False)
 def login_submit(
+    request: Request,
     username: str = Form(default=""),
     password: str = Form(default=""),
 ) -> Response:
+    client = (request.client.host if request.client else "") or "unknown"
+    failures = _login_failures.get(client, 0)
+
+    # Задержка перед проверкой, а не после: она удорожает саму попытку.
+    delay = LOGIN_DELAY_SECONDS[min(failures, len(LOGIN_DELAY_SECONDS) - 1)]
+
+    if delay:
+        time.sleep(delay)
+
     try:
         valid = check_password(username, password)
     except AuthNotConfigured as exc:
@@ -146,10 +171,21 @@ def login_submit(
         ) from exc
 
     if not valid:
+        _login_failures[client] = failures + 1
+
+        logger.warning(
+            "Неудачный вход в управление: адрес %s, попытка %s подряд",
+            client,
+            failures + 1,
+        )
+
         return RedirectResponse(
             "/admin/login?error=1",
             status_code=status.HTTP_303_SEE_OTHER,
         )
+
+    _login_failures.pop(client, None)
+    logger.info("Вход в управление: адрес %s", client)
 
     response = RedirectResponse(
         "/admin", status_code=status.HTTP_303_SEE_OTHER
@@ -254,7 +290,6 @@ SERVICE_UNITS = (
     ("sochi-search-worker.timer", "Разбор очереди"),
     ("sochi-search-discovery.timer", "Обход сайта"),
     ("sochi-search-publication-date.timer", "Даты публикации"),
-    ("sochi-search-content-cleanup.timer", "Очистка текстов"),
     ("sochi-search-pdf-ocr@1.timer", "Распознавание, слот 1"),
     ("sochi-search-pdf-ocr@2.timer", "Распознавание, слот 2"),
     ("sochi-search-backup.timer", "Резервное копирование"),

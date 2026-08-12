@@ -156,23 +156,6 @@ class SearchBodyTests(unittest.TestCase):
             json.dumps(filters, ensure_ascii=False),
         )
 
-    def test_legacy_category_fallback_includes_www_urls(self) -> None:
-        category = search_service.content_category_filter("events")
-        prefixes = {
-            clause["prefix"]["url"]
-            for clause in category["bool"]["should"]
-            if "prefix" in clause
-        }
-
-        self.assertIn(
-            "https://www.sochi.ru/afisha-goroda/",
-            prefixes,
-        )
-        self.assertIn(
-            "http://sochi.ru/kalendar-meropriyatiy/",
-            prefixes,
-        )
-
     def test_fuzzy_fallback_preserves_filters_and_is_bounded(self) -> None:
         """
         Запасной нечёткий запрос сохраняет фильтры и остаётся ограниченным.

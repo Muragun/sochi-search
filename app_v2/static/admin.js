@@ -225,7 +225,6 @@ function renderProgress(pipeline) {
 
     const stageLabels = {
         publication_date: "Даты публикации",
-        content_cleanup: "Очистка текстов",
         pdf_ocr: "Распознавание PDF",
     };
 
@@ -281,6 +280,7 @@ function taskStateLabel(state) {
     switch (state) {
         case "running": return ["выполняется", "warn"];
         case "finished": return ["завершена", "ok"];
+        case "failed": return ["ошибка", "bad"];
         case "stopped": return ["остановлена", "idle"];
         case "never": return ["не запускалась", "idle"];
         default: return [state || "?", "idle"];

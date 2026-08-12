@@ -35,12 +35,17 @@ class ElasticsearchHttpClient:
         # Одиночный сетевой сбой или короткая недоступность узла не должны
         # превращаться в ошибку пользователю. Повторяем только безопасные
         # коды и только дважды, чтобы не растягивать ответ.
+        # Повторяем только установку соединения. Повтор по коду ответа
+        # умножал время ожидания: три попытки по 35 секунд давали до
+        # полутора минут на один вызов, а обработчики синхронные — такой
+        # запрос занимает поток из пула, и медленный кластер подвешивает
+        # весь API, включая проверку живости.
         retry = Retry(
             total=2,
             connect=2,
-            read=1,
+            read=0,
+            status=0,
             backoff_factor=0.2,
-            status_forcelist=(502, 503, 504),
             allowed_methods=frozenset({"GET", "POST"}),
             raise_on_status=False,
         )
@@ -87,7 +92,13 @@ class ElasticsearchHttpClient:
                 method=method,
                 url=url,
                 json=json_body,
-                timeout=(5, 30),
+                # Подключение и чтение. Тридцать секунд на чтение —
+                # это ожидание, которое пользователь всё равно не
+                # дождётся: он уже перезагрузил страницу.
+                timeout=(
+                    settings.es_connect_timeout,
+                    settings.es_read_timeout,
+                ),
                 verify=settings.es_verify_tls,
             )
         except requests.RequestException as exc:

@@ -16,10 +16,10 @@
 
     <link
         rel="stylesheet"
-        href="/assets/search.css?v=9"
+        href="/assets/search.css?v=11"
     >
     <script
-        src="/assets/search.js?v=9"
+        src="/assets/search.js?v=11"
         defer
     ></script>
 </head>
@@ -103,7 +103,14 @@
                 </div>
             </div>
 
-            <div class="pipeline-metrics" aria-live="polite">
+            <!--
+                aria-live здесь был лишним: блок переписывается каждые
+                тридцать секунд, и скринридер зачитывал все шесть чисел
+                поверх чтения результатов. Состояние загрузки — не
+                оперативное уведомление; о занятости говорит aria-busy на
+                самой панели.
+            -->
+            <div class="pipeline-metrics">
                 <div class="pipeline-metric">
                     <span class="pipeline-metric__label">Найдено URL</span>
                     <strong id="pipeline-total">—</strong>
@@ -153,10 +160,6 @@
                     <article class="pipeline-queue">
                         <h3>Даты публикаций</h3>
                         <p id="pipeline-publication">—</p>
-                    </article>
-                    <article class="pipeline-queue">
-                        <h3>Очистка содержимого</h3>
-                        <p id="pipeline-cleanup">—</p>
                     </article>
                     <article class="pipeline-queue">
                         <h3>Распознавание PDF</h3>
@@ -383,7 +386,9 @@
         ></nav>
 
         <section id="search-meta" class="search-meta" hidden>
-            <div id="search-summary"></div>
+            <!-- Объявляется только эта строка: раньше aria-live висел на
+                 всей выдаче, и скринридер зачитывал десять карточек. -->
+            <div id="search-summary" aria-live="polite"></div>
 
             <button
                 id="export-button"
@@ -391,14 +396,13 @@
                 type="button"
                 hidden
             >
-                Скачать CSV
+                Скачать эту страницу (CSV)
             </button>
         </section>
 
         <section
             id="results"
             class="results"
-            aria-live="polite"
             aria-busy="false"
         ></section>
 

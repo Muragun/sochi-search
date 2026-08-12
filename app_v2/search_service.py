@@ -4,7 +4,6 @@ import html
 import re
 from typing import Any
 
-from .config import settings
 from .es_http import es_client
 from crawler_v2.pdf_ocr import (
     looks_like_garbled_text,
@@ -58,44 +57,6 @@ QUESTION_STOP_WORDS = {
     "расскажи",
 }
 
-SEARCH_REQUIRED_SOURCE_FIELDS = (
-    "url",
-    "file_url",
-    "page_url",
-    "title",
-    "text",
-    "content",
-    "body",
-    "description",
-    "headings",
-    "section",
-    "content_category",
-    "site_section",
-    "doc_type",
-    "document_type",
-    "content_type",
-    "document_number",
-    "document_date",
-    "published_at",
-    "sort_date",
-    "document_kind",
-    "parent_url",
-    "attachment_title",
-    "is_attachment",
-    "page_number",
-    "chunk_number",
-    "updated_at",
-    "fetched_at",
-    "source",
-    "extraction_version",
-    "text_extraction",
-    "ocr_used",
-    "source_page_count",
-    "ocr_page_count",
-    "ocr_attempted_page_count",
-    "ocr_rejected_page_count",
-    "unreadable_page_count",
-)
 
 
 def normalize_text(value: str) -> str:
@@ -273,6 +234,17 @@ RUSSIAN_MONTHS_GENITIVE = (
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 )
 
+
+# Здесь были ещё восемь конструкций: normalize_optional_filter,
+# exact_text_filter, normalize_document_number, document_number_filter,
+# date_filter, url_prefix_filter, content_category_filter и список
+# SEARCH_REQUIRED_SOURCE_FIELDS — около трёхсот строк.
+#
+# Все они собирали запрос к прежней схеме индекса. С переходом на
+# sochi_docs_v3 сборка переехала в app_v2/search_query.py, а эти остались
+# лежать рядом: вторые реализации тех же функций, местами с другим
+# поведением. Ни одна не вызывалась из рабочего кода — только из тестов,
+# которые проверяли сами себя.
 
 def format_document_date(value: str) -> str:
     """
@@ -528,309 +500,18 @@ def make_snippet(
     return truncate(result, limit)
 
 
-def normalize_optional_filter(
-    value: str | None,
-) -> str | None:
-    if value is None:
-        return None
-
-    normalized = value.strip()
-
-    return normalized or None
 
 
-def exact_text_filter(
-    field_name: str,
-    value: str,
-) -> dict[str, Any]:
-    return {
-        "bool": {
-            "should": [
-                {
-                    "term": {
-                        f"{field_name}.raw": {
-                            "value": value,
-                            "case_insensitive": True,
-                        }
-                    }
-                },
-                {
-                    "match_phrase": {
-                        field_name: {
-                            "query": value,
-                        }
-                    }
-                },
-            ],
-            "minimum_should_match": 1,
-        }
-    }
 
 
-def normalize_document_number(
-    value: str,
-) -> str:
-    normalized = value.strip()
-
-    normalized = normalized.replace(
-        "\u00a0",
-        " ",
-    )
-
-    for dash in (
-        "‐",
-        "-",
-        "‒",
-        "–",
-        "—",
-        "−",
-    ):
-        normalized = normalized.replace(
-            dash,
-            "-",
-        )
-
-    normalized = "".join(
-        normalized.split()
-    )
-
-    normalized = (
-        normalized
-        .replace("P", "Р")
-        .replace("p", "р")
-    )
-
-    return normalized.lower()
 
 
-def document_number_filter(
-    value: str,
-) -> dict[str, Any]:
-    normalized = normalize_document_number(
-        value
-    )
-
-    variants = {
-        value.strip(),
-        normalized,
-        normalized.replace("р", "p"),
-    }
-
-    clauses: list[
-        dict[str, Any]
-    ] = []
-
-    for variant in sorted(variants):
-        if not variant:
-            continue
-
-        clauses.extend(
-            [
-                {
-                    "term": {
-                        "document_number.raw": {
-                            "value": variant,
-                            "case_insensitive": True,
-                        }
-                    }
-                },
-                {
-                    "match_phrase": {
-                        "document_number": {
-                            "query": variant,
-                        }
-                    }
-                },
-            ]
-        )
-
-    return {
-        "bool": {
-            "should": clauses,
-            "minimum_should_match": 1,
-        }
-    }
 
 
-def date_filter(
-    date_from: str | None,
-    date_to: str | None,
-) -> dict[str, Any]:
-    """Фильтрует и старые, и новые документы по единой дате."""
-    date_range: dict[str, str] = {}
-
-    if date_from:
-        date_range["gte"] = date_from
-
-    if date_to:
-        date_range["lte"] = date_to
-
-    return {
-        "bool": {
-            "should": [
-                {
-                    "range": {
-                        field_name: dict(date_range)
-                    }
-                }
-                for field_name in (
-                    "sort_date",
-                    "document_date",
-                    "published_at",
-                )
-            ],
-            "minimum_should_match": 1,
-        }
-    }
 
 
-def url_prefix_filter(
-    *paths: str,
-) -> dict[str, Any]:
-    hosts = (
-        "http://sochi.ru",
-        "https://sochi.ru",
-        "https://sochi.ru:443",
-        "http://www.sochi.ru",
-        "https://www.sochi.ru",
-    )
-
-    clauses: list[
-        dict[str, Any]
-    ] = []
-
-    for host in hosts:
-        for path in paths:
-            clauses.append(
-                {
-                    "prefix": {
-                        "url": (
-                            f"{host}{path}"
-                        )
-                    }
-                }
-            )
-
-    return {
-        "bool": {
-            "should": clauses,
-            "minimum_should_match": 1,
-        }
-    }
 
 
-def content_category_filter(
-    category: str,
-) -> dict[str, Any]:
-    """
-    Новые документы фильтруются по
-    content_category.
-
-    Для старых документов сохраняется
-    совместимость через URL.
-    """
-
-    normalized = str(
-        category or ""
-    ).strip().casefold()
-
-    category_paths = {
-        "news": (
-            "/press-sluzhba/novosti/",
-        ),
-
-        "legal": (
-            (
-                "/gorodskaya-vlast/"
-                "normativno-pravovyye-akty/"
-            ),
-        ),
-
-        "announcement": (
-            "/press-sluzhba/obyavleniya/",
-        ),
-
-        "media": (
-            "/press-sluzhba/mediagalereya",
-            "/press-sluzhba/mediagalareya",
-        ),
-
-        "press": (
-            "/press-sluzhba/",
-        ),
-
-        "city_authority": (
-            "/gorodskaya-vlast/",
-        ),
-
-        "city_life": (
-            "/zhizn-goroda/",
-        ),
-
-        "city": (
-            "/gorod/",
-        ),
-
-        "events": (
-            "/afisha-goroda/",
-            "/kalendar-meropriyatiy/",
-        ),
-
-        "file": (
-            "/upload/",
-        ),
-
-        "legacy": (
-            "/content/",
-            "/contents/",
-            "/strucrure_sochi/",
-        ),
-    }
-
-    should_clauses: list[
-        dict[str, Any]
-    ] = [
-        {
-            "term": {
-                "content_category": (
-                    normalized
-                )
-            }
-        }
-    ]
-
-    url_bases = (
-        "http://sochi.ru",
-        "https://sochi.ru",
-        "https://sochi.ru:443",
-        "http://www.sochi.ru",
-        "https://www.sochi.ru",
-    )
-
-    for path_prefix in (
-        category_paths.get(
-            normalized,
-            (),
-        )
-    ):
-        for url_base in url_bases:
-            should_clauses.append(
-                {
-                    "prefix": {
-                        "url": (
-                            url_base
-                            + path_prefix
-                        )
-                    }
-                }
-            )
-
-    return {
-        "bool": {
-            "should": should_clauses,
-            "minimum_should_match": 1,
-        }
-    }
 
 
 # Построение запроса вынесено в отдельный модуль: старая версия искала по

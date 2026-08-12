@@ -20,6 +20,17 @@ log() {
     printf '%s [%s] %s\n' "$(date -Is)" "$ROLE" "$*"
 }
 
+# Очередь обхода живёт в SQLite, и её схему до сих пор создавали только
+# разовые утилиты. На машине, развёрнутой с нуля, базы не было вовсе:
+# обход падал с «Таблица crawl_urls не найдена». Вызов идемпотентный.
+ensure_state_database() {
+    $PYTHON -B -m ops.init_state || {
+        log "не удалось подготовить базу очереди"
+        return 1
+    }
+}
+
+
 wait_for_elasticsearch() {
     log "жду Elasticsearch: ${ES_URL:-http://elasticsearch:9200}"
     $PYTHON -B -m ops.wait_for_elasticsearch \
@@ -53,6 +64,7 @@ run_loop() {
 case "$ROLE" in
     api)
         wait_for_elasticsearch
+        ensure_state_database
         log "запуск API на ${APP_HOST}:${APP_PORT}"
         exec $PYTHON -m uvicorn app_v2.main:app \
             --host "$APP_HOST" --port "$APP_PORT" \
@@ -61,6 +73,7 @@ case "$ROLE" in
 
     worker)
         wait_for_elasticsearch
+        ensure_state_database
         run_loop "${WORKER_INTERVAL:-120}" \
             $PYTHON -B -m crawler_v2.incremental_worker \
                 --limit "${WORKER_LIMIT:-100}"
@@ -68,6 +81,7 @@ case "$ROLE" in
 
     discovery)
         wait_for_elasticsearch
+        ensure_state_database
         run_loop "${DISCOVERY_INTERVAL:-3600}" \
             $PYTHON -B -m crawler_v2.discovery_worker_v2 \
                 --html-only \
@@ -81,6 +95,7 @@ case "$ROLE" in
 
     ocr)
         wait_for_elasticsearch
+        ensure_state_database
         log "слот распознавания: ${OCR_SLOT:-1}"
         run_loop "${OCR_INTERVAL:-60}" \
             $PYTHON -B -m crawler_v2.incremental_worker \
@@ -92,17 +107,12 @@ case "$ROLE" in
 
     publication-date)
         wait_for_elasticsearch
+        ensure_state_database
         run_loop "${PUBLICATION_DATE_INTERVAL:-300}" \
             $PYTHON -B -m crawler_v2.publication_date_worker \
                 --limit "${PUBLICATION_DATE_LIMIT:-200}"
         ;;
 
-    content-cleanup)
-        wait_for_elasticsearch
-        run_loop "${CONTENT_CLEANUP_INTERVAL:-600}" \
-            $PYTHON -B -m crawler_v2.content_cleanup_worker \
-                --limit "${CONTENT_CLEANUP_LIMIT:-200}"
-        ;;
 
     backup)
         run_loop "${BACKUP_INTERVAL:-86400}" \

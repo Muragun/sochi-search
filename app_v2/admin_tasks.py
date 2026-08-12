@@ -17,6 +17,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,17 +97,6 @@ TASKS: tuple[TaskDefinition, ...] = (
         lock_name="publication-date-worker.lock",
     ),
     TaskDefinition(
-        key="content_cleanup",
-        title="Почистить тексты",
-        description=(
-            "Убирает служебные фрагменты вроде «Номер документа:» "
-            "из текста страниц."
-        ),
-        module="crawler_v2.content_cleanup_worker",
-        arguments=("--limit", "200"),
-        lock_name="content-cleanup-worker.lock",
-    ),
-    TaskDefinition(
         key="reindex_url",
         title="Переиндексировать документ",
         description=(
@@ -121,6 +111,10 @@ TASKS: tuple[TaskDefinition, ...] = (
 )
 
 TASKS_BY_KEY = {task.key: task for task in TASKS}
+
+# Код, которым flock сообщает, что блокировку взять не удалось.
+# Задан в build_command через --conflict-exit-code.
+LOCK_CONFLICT_EXIT_CODE = 75
 
 
 def state_directory() -> Path:
@@ -137,7 +131,19 @@ class TaskRunner:
 
     def __init__(self) -> None:
         self.directory = state_directory()
+
+    def ensure_directory(self) -> Path:
+        """
+        Создаёт каталог журналов при первом обращении.
+
+        Раньше mkdir стоял в конструкторе, а сам runner создаётся на
+        уровне модуля: недоступный на запись каталог ронял импорт
+        app_v2.main — вместе с ним не поднимался и поиск.
+        """
+
         self.directory.mkdir(parents=True, exist_ok=True)
+
+        return self.directory
 
     def log_path(self, key: str) -> Path:
         return self.directory / f"{key}.log"
@@ -238,6 +244,7 @@ class TaskRunner:
         if self.is_running(key):
             raise RuntimeError("Задача уже выполняется")
 
+        self.ensure_directory()
         command = self.build_command(task, url=url)
         log = self.log_path(key)
         project = Path(__file__).resolve().parents[1]
@@ -277,7 +284,71 @@ class TaskRunner:
             encoding="utf-8",
         )
 
+        # Исход записывает отдельный поток.
+        #
+        # Раньше «running» ставился здесь, «stopped» — в stop(), и больше
+        # статус не трогал никто: код возврата не читался вовсе. Любая
+        # штатно завершившаяся задача при следующем чтении помечалась
+        # «завершилась во время перезапуска API» — успех, падение с
+        # трассировкой и конфликт блокировки выглядели одинаково.
+        watcher = threading.Thread(
+            target=self._watch,
+            args=(key, process),
+            daemon=True,
+            name=f"task-watch-{key}",
+        )
+        watcher.start()
+
         return status
+
+    def _watch(self, key: str, process: subprocess.Popen) -> None:
+        """Ждёт завершения и записывает исход в файл состояния."""
+
+        try:
+            code = process.wait()
+        except Exception:  # noqa: BLE001
+            return
+
+        try:
+            status = json.loads(
+                self.status_path(key).read_text(encoding="utf-8")
+            )
+        except Exception:  # noqa: BLE001
+            return
+
+        # Задачу могли остановить руками, пока мы ждали.
+        if int(status.get("pid") or 0) != process.pid:
+            return
+
+        if status.get("state") == "stopped":
+            status["exit_code"] = code
+        elif code == 0:
+            status["state"] = "finished"
+            status["note"] = "завершилась успешно"
+            status["exit_code"] = 0
+        elif code == LOCK_CONFLICT_EXIT_CODE:
+            # flock не смог взять блокировку: параллельно работает та же
+            # задача по расписанию. Это штатная ситуация, а не поломка.
+            status["state"] = "finished"
+            status["note"] = (
+                "не запускалась: та же задача уже выполняется по расписанию"
+            )
+            status["exit_code"] = code
+        else:
+            status["state"] = "failed"
+            status["note"] = f"завершилась с ошибкой, код {code}"
+            status["exit_code"] = code
+
+        status["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        status.pop("elapsed_seconds", None)
+
+        try:
+            self.status_path(key).write_text(
+                json.dumps(status, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     def stop(self, key: str) -> dict[str, Any]:
         status = self.read_status(key)

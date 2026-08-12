@@ -430,22 +430,11 @@ def collect_pipeline_status(
             connection,
             "publication_date_queue",
         )
-        cleanup_counts = status_counts(
-            connection,
-            "content_cleanup_queue",
-        )
-
         publication = queue_summary(
             publication_counts,
             completed_statuses={"done", "no_date", "skipped"},
             pending_statuses={"not_indexed", "pending", "retry"},
             problem_statuses={"failed", "no_date", "retry"},
-        )
-        cleanup = queue_summary(
-            cleanup_counts,
-            completed_statuses={"done", "skipped_out_of_scope"},
-            pending_statuses={"pending", "retry"},
-            problem_statuses={"failed", "retry"},
         )
         pdf_ocr_remaining = max(
             0,
@@ -493,7 +482,6 @@ def collect_pipeline_status(
                 "documents": elasticsearch_documents,
             },
             "publication_date": publication,
-            "content_cleanup": cleanup,
             "pdf_ocr": {
                 "available": (
                     "extraction_version"

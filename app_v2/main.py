@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,19 @@ from .pipeline_status import (
     build_pipeline_status,
 )
 from .admin import router as admin_router
+
+
+# Логирование.
+#
+# До этого в app_v2 не было ни одного вызова logging: единственным следом
+# ошибки оставалась трассировка в журнале uvicorn, без контекста. Сюда
+# пишутся отказы Elasticsearch, неудачные входы и падения задач.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+logger = logging.getLogger("sochi_search")
 
 
 app = FastAPI(
@@ -231,15 +245,27 @@ def normalize_search_options(
 def elasticsearch_http_exception(
     exc: ElasticsearchRequestError,
 ) -> HTTPException:
-    detail = {
-        "message": str(exc),
-        "elasticsearch_status": exc.status_code,
-        "elasticsearch_response": exc.response_body,
-    }
+    """
+    Ошибка Elasticsearch — в журнал, наружу общее сообщение.
+
+    Раньше в ответ уходило до двух тысяч символов тела ответа кластера:
+    имена индексов и узлов, подробности mapping, иногда java-трассировки.
+    Отдавалось это анонимному клиенту на /search и /stats.
+    """
+
+    logger.error(
+        "Elasticsearch ответил %s: %s | тело: %s",
+        exc.status_code,
+        exc,
+        (exc.response_body or "")[:2000],
+    )
 
     return HTTPException(
         status_code=502,
-        detail=detail,
+        detail={
+            "message": "Поиск временно недоступен",
+            "elasticsearch_status": exc.status_code,
+        },
     )
 
 
@@ -324,6 +350,12 @@ def health_ready() -> JSONResponse:
         )
 
     except ElasticsearchRequestError as exc:
+        logger.warning(
+            "Проверка готовности не прошла: %s | тело: %s",
+            exc,
+            (exc.response_body or "")[:2000],
+        )
+
         return JSONResponse(
             status_code=503,
             content={
@@ -332,7 +364,6 @@ def health_ready() -> JSONResponse:
                 "index": settings.es_index,
                 "error": str(exc),
                 "elasticsearch_status": exc.status_code,
-                "elasticsearch_response": exc.response_body,
             },
         )
 

@@ -138,7 +138,6 @@ class PipelineStatusTests(unittest.TestCase):
             self.assertEqual(formats["text"]["remaining"], 1)
             self.assertEqual(result["publication_date"]["pending"], 2)
             self.assertEqual(result["publication_date"]["problems"], 1)
-            self.assertEqual(result["content_cleanup"]["completed"], 2)
             self.assertTrue(result["pdf_ocr"]["available"])
             self.assertEqual(result["pdf_ocr"]["total"], 1)
             self.assertEqual(result["pdf_ocr"]["completed"], 0)

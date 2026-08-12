@@ -136,7 +136,15 @@ curl -fsS "http://127.0.0.1:9200/_cluster/health" >/dev/null 2>&1 || fail \
     echo 'vm.max_map_count=262144' >> /etc/sysctl.conf"
 
 
-say "5. Создание индекса"
+say "5. База очереди обхода"
+
+# Схема SQLite создаётся отдельно от индекса Elasticsearch. Раньше её не
+# создавал никто: deploy.sh поднимал индекс, печатал «нажмите Обход
+# сайта», и обход падал с «Таблица crawl_urls не найдена».
+$COMPOSE run --rm --no-deps api python -B -m ops.init_state
+
+
+say "6. Создание индекса"
 
 if curl -fsS "http://127.0.0.1:9200/${ES_INDEX:-sochi_search}/_count" >/dev/null 2>&1; then
     echo "  индекс ${ES_INDEX:-sochi_search} уже существует, пропускаю"
@@ -147,7 +155,7 @@ else
 fi
 
 
-say "6. Запуск приложения"
+say "7. Запуск приложения"
 $COMPOSE up -d
 
 printf '  жду ответа поиска'
