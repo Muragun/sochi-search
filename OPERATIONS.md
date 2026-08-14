@@ -12,7 +12,9 @@
 - `crawler.remaining_urls` — активные URL, ожидающие основной обработки;
 - `crawler.processing_urls` — URL, захваченные прямо сейчас;
 - `elasticsearch.documents` — поисковые фрагменты, а не число URL;
-- `pdf_ocr.completed` — PDF, завершившие `pdf-ocr-v5`;
+- `pdf_ocr.completed` — PDF, завершившие текущий `PDF_EXTRACTION_VERSION`
+  (сейчас `pdf-ocr-v7`; строка поднимается при каждом изменении,
+  влияющем на распознавание, и тогда корпус перечитывается заново);
 - `pdf_ocr.fast_indexed` — PDF уже в поиске через `pdf-native-v1`, но ждут OCR;
 - `pdf_ocr.remaining` — оставшаяся фоновая очередь;
 - `pdf_ocr.processing` — текущий PDF OCR.
@@ -65,7 +67,7 @@ PDF_PROGRESS page=0/24 stage=opened elapsed_seconds=0
 PDF_PROGRESS page=1/24 readable=1 ocr_attempted=1 ocr_used=1 ...
 PDF_PAGE_TIMEOUT page=5 timeout_seconds=45
 PDF_BUDGET_EXHAUSTED page=10/24 attempted=9 budget_seconds=360
-PDF extraction version: pdf-ocr-v5
+PDF extraction version: pdf-ocr-v7
 ```
 
 `PDF_PAGE_TIMEOUT` и `PDF_BUDGET_EXHAUSTED` не являются аварией worker. Уже

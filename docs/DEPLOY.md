@@ -347,7 +347,7 @@ curl -XPUT "http://127.0.0.1:9200/_snapshot/move" \
 
 curl -XPUT "http://127.0.0.1:9200/_snapshot/move/full?wait_for_completion=true" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"sochi_docs_v3_*","include_global_state":false}'
+  -d '{"indices":"sochi_docs_v4_*","include_global_state":false}'
 ```
 
 > Если старая машина ещё на прежнем `docker-compose.yml`, у неё нет тома
@@ -389,7 +389,7 @@ curl -XPUT "http://127.0.0.1:9200/_snapshot/move" \
 Шаг 2. Посмотреть, что есть сейчас и что лежит в снимке:
 
 ```bash
-curl -s "http://127.0.0.1:9200/_cat/indices/sochi_docs_v3_*?h=index,docs.count"
+curl -s "http://127.0.0.1:9200/_cat/indices/sochi_docs_v4_*?h=index,docs.count"
 curl -s "http://127.0.0.1:9200/_snapshot/move/_all?pretty" | grep -E '"snapshot"|sochi_docs'
 ```
 
@@ -411,7 +411,7 @@ curl -XDELETE "http://127.0.0.1:9200/<имя пустого индекса>"
 ```bash
 curl -XPOST "http://127.0.0.1:9200/_snapshot/move/full/_restore?wait_for_completion=true" \
   -H 'Content-Type: application/json' \
-  -d '{"indices":"sochi_docs_v3_*","include_global_state":false}'
+  -d '{"indices":"sochi_docs_v4_*","include_global_state":false}'
 
 curl -XPOST "http://127.0.0.1:9200/_aliases" \
   -H 'Content-Type: application/json' \
@@ -628,13 +628,13 @@ GET /search?q=<запрос>&limit=5
    памяти и заметно быстрее работает с видеокартой. На нынешних 8 ГБ
    рядом с Elasticsearch и распознаванием ей места нет.
 
-2. **Новое поле в схеме.** В `elasticsearch/sochi_docs_v3.json`
+2. **Новое поле в схеме.** В `elasticsearch/sochi_docs_v4.json`
    добавляется поле типа `dense_vector` — по одному вектору на фрагмент
    текста. Схема уже хранит текст фрагментами по 3500 символов, и это
    ровно тот размер, с которым работают модели: резать заново не
    придётся.
 
-3. **Пересборка индекса.** Через тот же `ops/reindex_v3.py`, которым уже
+3. **Пересборка индекса.** Через тот же `ops/reindex.py`, которым уже
    делался переход на нынешнюю схему: alias переключается одной
    операцией, поиск при этом не останавливается.
 

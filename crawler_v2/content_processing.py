@@ -34,6 +34,7 @@ from .pdf_ocr import (
     extract_pdf_page_text,
     legal_header_needs_ocr,
 )
+from .text_repair import repair_ocr_text
 
 
 WHITESPACE_RE = re.compile(r"\s+")
@@ -1363,10 +1364,24 @@ def _extract_pdf_in_process(
                 continue
 
             try:
+                # Склейка переносов нужна и здесь, а не только после OCR:
+                # в вёрстке правовых актов строка выравнивается по ширине,
+                # и слова рвутся дефисом независимо от того, есть у PDF
+                # текстовый слой или нет. «благоустрой-\nство» — два
+                # токена в индексе, и ни один не найдётся по запросу
+                # «благоустройство».
+                #
+                # Письменность здесь намеренно не чинится: на этом тексте
+                # принимается решение, запускать ли OCR, и подмена букв
+                # сдвинула бы оценку качества слоя.
                 native_text = normalize_text(
-                    page.get_text(
-                        "text",
-                        sort=True,
+                    repair_ocr_text(
+                        page.get_text(
+                            "text",
+                            sort=True,
+                        ),
+                        fix_mixed_script=False,
+                        fix_document_numbers=False,
                     )
                 )
 
