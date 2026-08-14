@@ -685,6 +685,21 @@ def build_documents(
         content.unreadable_pages
     )
 
+    # Средняя уверенность Tesseract по распознанным страницам документа.
+    #
+    # None, а не ноль, когда OCR не запускался: ноль в поле `float`
+    # означал бы «распознано отвратительно» и попал бы в отбор страниц
+    # на переделку, хотя распознавать было нечего.
+    ocr_confidence = (
+        round(
+            sum(content.ocr_confidences)
+            / len(content.ocr_confidences),
+            2,
+        )
+        if content.ocr_confidences
+        else None
+    )
+
     documents: list[dict[str, Any]] = []
 
     for chunk in chunks:
@@ -778,6 +793,7 @@ def build_documents(
                 "ocr_page_count": len(
                     content.ocr_pages
                 ),
+                "ocr_confidence": ocr_confidence,
                 "ocr_attempted_page_count": len(
                     content.ocr_attempted_pages
                 ),

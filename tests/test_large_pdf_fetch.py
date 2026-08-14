@@ -38,8 +38,12 @@ from crawler_v2.content_processing import (
     PdfExtractionTimeoutError,
     extract_pdf,
 )
-from crawler_v2.pdf_ocr import PDF_FAST_EXTRACTION_VERSION
+from crawler_v2.pdf_ocr import (
+    PDF_EXTRACTION_VERSION,
+    PDF_FAST_EXTRACTION_VERSION,
+)
 from crawler_v2.fetcher import (
+    DocumentTooLargeError,
     DownloadTooLargeError,
     HttpFetcher,
 )
@@ -196,8 +200,13 @@ class LargePdfFetchTests(unittest.TestCase):
                     response
                 )
 
+                # Слишком большой PDF — не ошибка загрузки, а решение не
+                # качать: документ остаётся в поиске по реквизитам из
+                # родительской карточки. Поэтому и исключение своё,
+                # отдельное от DownloadTooLargeError, по которому адрес
+                # уходит в retry.
                 with self.assertRaises(
-                    DownloadTooLargeError
+                    DocumentTooLargeError
                 ):
                     fetcher.fetch(
                         response.url,
@@ -241,7 +250,15 @@ class LargePdfFetchTests(unittest.TestCase):
                 )
 
             self.assertEqual(content.source_page_count, 1)
-            self.assertEqual(content.extraction_version, "pdf-ocr-v5")
+
+            # Сверяемся с константой, а не с её значением: версия
+            # поднимается при каждом изменении, влияющем на распознавание,
+            # и записанная сюда строка устаревает молча. Ровно так этот
+            # тест и разошёлся с кодом на pdf-ocr-v5.
+            self.assertEqual(
+                content.extraction_version,
+                PDF_EXTRACTION_VERSION,
+            )
             self.assertIn(
                 "isolated PDF extraction",
                 content.pages[0][1],

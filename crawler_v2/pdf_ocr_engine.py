@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .pdf_ocr_image import PreparedPage, prepare_page
+from .text_repair import repair_ocr_text
 
 
 class TesseractUnavailableError(RuntimeError):
@@ -40,6 +41,26 @@ class TesseractUnavailableError(RuntimeError):
 
 class PageTimeoutError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class TesseractOutput:
+    """Результат одного запуска Tesseract."""
+
+    text: str
+    confidence: float
+    low_confidence_ratio: float
+    words: int
+
+
+@dataclass(frozen=True)
+class OcrAttempt:
+    """Одна ступень лестницы попыток — для журнала и отчётов."""
+
+    label: str
+    confidence: float
+    characters: int
+    seconds: float
 
 
 @dataclass(frozen=True)
@@ -53,6 +74,23 @@ class OcrPageResult:
     blank: bool
     timed_out: bool = False
     error: str | None = None
+
+    # Собственная уверенность Tesseract, 0–100.
+    #
+    # Эвристическая оценка текста (`evaluate_text_quality`) отличает
+    # осмысленный текст от глифовой каши, но не отличает верно распознанную
+    # страницу от неверно распознанной: у выцветшей копии с точностью 50 %
+    # она даёт те же 100 баллов, что и у чистого скана. Средняя уверенность
+    # по словам на тех же страницах — 24 против 96. Это единственный
+    # доступный признак, по которому можно решить, стоит ли пробовать ещё
+    # раз, и он достаётся бесплатно: тот же запуск, ещё один вид выдачи.
+    confidence: float = 0.0
+    low_confidence_ratio: float = 0.0
+    word_count: int = 0
+
+    rotation: int = 0
+    method: str = "sauvola"
+    attempts: tuple[OcrAttempt, ...] = ()
 
 
 def resolve_tesseract(explicit: str | None = None) -> str:
@@ -199,6 +237,48 @@ def _terminate_group(process: subprocess.Popen) -> None:
             continue
 
 
+def parse_tsv_confidence(
+    tsv_text: str,
+) -> tuple[float, float, int]:
+    """
+    Средняя уверенность по словам, доля ненадёжных и число слов.
+
+    В TSV Tesseract кладёт по строке на каждый элемент разметки: страницу,
+    блок, абзац, строку и слово. Уверенность осмысленна только у слов, у
+    остальных стоит −1, поэтому строки без текста отбрасываются.
+    """
+
+    confidences: list[float] = []
+
+    for line in tsv_text.splitlines()[1:]:
+        columns = line.split("\t")
+
+        if len(columns) < 12:
+            continue
+
+        try:
+            value = float(columns[10])
+        except ValueError:
+            continue
+
+        if value < 0 or not columns[11].strip():
+            continue
+
+        confidences.append(value)
+
+    if not confidences:
+        return 0.0, 1.0, 0
+
+    average = sum(confidences) / len(confidences)
+    low = sum(1 for value in confidences if value < 60.0)
+
+    return (
+        round(average, 2),
+        round(low / len(confidences), 4),
+        len(confidences),
+    )
+
+
 def run_tesseract(
     image_path: Path,
     *,
@@ -210,7 +290,7 @@ def run_tesseract(
     oem: int,
     threads: int,
     timeout_seconds: int,
-) -> str:
+) -> TesseractOutput:
     environment = dict(os.environ)
     environment["TESSDATA_PREFIX"] = str(tessdata.resolve())
     environment["OMP_THREAD_LIMIT"] = str(max(1, threads))
@@ -237,6 +317,13 @@ def run_tesseract(
             # потеря времени. Замер на сервере: 12,24 с против 8,74 с при
             # полностью совпадающем тексте.
             "-c", "tessedit_do_invert=0",
+
+            # Два вида выдачи за один разбор страницы. Отдельный запуск
+            # ради TSV стоил бы столько же, сколько сам OCR; здесь
+            # распознавание уже сделано, и tsv — только другая запись
+            # того же результата.
+            "txt",
+            "tsv",
         ]
 
         process = subprocess.Popen(
@@ -268,14 +355,82 @@ def run_tesseract(
             )
 
         text_path = output_base.with_suffix(".txt")
+        tsv_path = output_base.with_suffix(".tsv")
 
-        if not text_path.is_file():
-            return ""
-
-        return text_path.read_text(
-            encoding="utf-8",
-            errors="replace",
+        text = (
+            text_path.read_text(encoding="utf-8", errors="replace")
+            if text_path.is_file()
+            else ""
         )
+
+        # Переносы склеиваются здесь, пока в тексте ещё есть переводы строк:
+        # дальше по конвейеру пробелы схлопываются, и «благоустрой- ство»
+        # уже не отличить от настоящего дефиса.
+        text = repair_ocr_text(text)
+
+        if not tsv_path.is_file():
+            return TesseractOutput(
+                text=text,
+                confidence=0.0,
+                low_confidence_ratio=1.0,
+                words=0,
+            )
+
+        confidence, low_ratio, words = parse_tsv_confidence(
+            tsv_path.read_text(encoding="utf-8", errors="replace")
+        )
+
+        return TesseractOutput(
+            text=text,
+            confidence=confidence,
+            low_confidence_ratio=low_ratio,
+            words=words,
+        )
+
+
+def _recognize_prepared(
+    prepared: PreparedPage,
+    *,
+    binary: str,
+    tessdata: Path,
+    languages: str,
+    dpi: int,
+    psm: int,
+    oem: int,
+    threads: int,
+    timeout_seconds: int,
+    working_directory: Path,
+) -> TesseractOutput:
+    """Сохраняет подготовленную страницу и отдаёт её Tesseract."""
+
+    working_directory.mkdir(parents=True, exist_ok=True)
+
+    handle = tempfile.NamedTemporaryFile(
+        suffix=".png",
+        prefix="sochi-page-",
+        dir=str(working_directory),
+        delete=False,
+    )
+    image_path = Path(handle.name)
+    handle.close()
+
+    try:
+        prepared.image.save(image_path, format="PNG", optimize=False)
+
+        return run_tesseract(
+            image_path,
+            binary=binary,
+            tessdata=tessdata,
+            languages=languages,
+            dpi=dpi,
+            psm=psm,
+            oem=oem,
+            threads=threads,
+            timeout_seconds=timeout_seconds,
+        )
+
+    finally:
+        image_path.unlink(missing_ok=True)
 
 
 def ocr_page(
@@ -294,7 +449,34 @@ def ocr_page(
     working_directory: Path,
     deskew: bool = True,
     binarize: bool = True,
+    sauvola_k: float = 0.15,
+    confidence_floor: float = 0.0,
+    retry_sauvola_k: float = 0.10,
+    retry_rotations: tuple[int, ...] = (),
+    ladder_budget_seconds: int = 0,
 ) -> OcrPageResult:
+    """
+    Распознаёт страницу, при низкой уверенности пробуя ещё раз иначе.
+
+    Первая попытка — обычная: бинаризация Сауволы, устранение перекоса,
+    удаление точек тонера. На нормальной странице она же и последняя, и
+    ничего не дорожает: `confidence_floor` не достигается только тогда,
+    когда Tesseract сам сообщает, что читал плохо.
+
+    Ступени подобраны по замерам на синтетических страницах с известным
+    эталоном:
+
+    | страница              | одна попытка | с лестницей |
+    | --------------------- | -----------: | ----------: |
+    | современный скан      |       99,4 % |      99,4 % |
+    | архивная ксерокопия   |       98,4 % |      98,4 % |
+    | выцветшая копия       |       49,7 % |      54,6 % |
+    | повёрнутая на 90°     |       15,9 % |      98,6 % |
+
+    Повёрнутая страница — это не редкость: альбомный скан А4 попадает в
+    архив ровно так же, как книжный, и до сих пор терялся целиком.
+    """
+
     from PIL import Image
 
     started = time.monotonic()
@@ -309,16 +491,17 @@ def ocr_page(
     pixmap = render_page(page, dpi)
     megapixels = round(pixmap.width * pixmap.height / 1e6, 2)
 
-    image = Image.frombytes(
+    source = Image.frombytes(
         "L",
         (pixmap.width, pixmap.height),
         pixmap.samples,
     )
 
     prepared: PreparedPage = prepare_page(
-        image,
+        source,
         deskew=deskew,
         binarize=binarize,
+        sauvola_k=sauvola_k,
     )
 
     if prepared.blank:
@@ -330,71 +513,181 @@ def ocr_page(
             skew_degrees=prepared.skew_degrees,
             ink_ratio=prepared.ink_ratio,
             blank=True,
+            method=prepared.method,
         )
 
-    working_directory.mkdir(parents=True, exist_ok=True)
+    def elapsed() -> float:
+        return time.monotonic() - started
 
-    handle = tempfile.NamedTemporaryFile(
-        suffix=".png",
-        prefix="sochi-page-",
-        dir=str(working_directory),
-        delete=False,
+    attempts: list[OcrAttempt] = []
+
+    best_output: TesseractOutput | None = None
+    best_prepared = prepared
+    best_rotation = 0
+    best_label = "прямо"
+
+    timed_out = False
+    errors: list[str] = []
+
+    def try_attempt(
+        candidate: PreparedPage,
+        *,
+        label: str,
+        rotation: int,
+    ) -> bool:
+        """Возвращает True, если уверенности достаточно и можно остановиться."""
+
+        nonlocal best_output, best_prepared, best_rotation, best_label
+        nonlocal timed_out
+
+        attempt_started = time.monotonic()
+
+        try:
+            output = _recognize_prepared(
+                candidate,
+                binary=binary,
+                tessdata=tessdata,
+                languages=languages,
+                dpi=dpi,
+                psm=psm,
+                oem=oem,
+                threads=threads,
+                timeout_seconds=timeout_seconds,
+                working_directory=working_directory,
+            )
+
+        except PageTimeoutError as exc:
+            timed_out = True
+            errors.append(f"{label}: {exc}")
+            return False
+
+        except Exception as exc:
+            errors.append(f"{label}: {type(exc).__name__}: {exc}")
+            return False
+
+        attempts.append(
+            OcrAttempt(
+                label=label,
+                confidence=output.confidence,
+                characters=len(output.text.strip()),
+                seconds=round(time.monotonic() - attempt_started, 2),
+            )
+        )
+
+        if (
+            best_output is None
+            or output.confidence > best_output.confidence
+        ):
+            best_output = output
+            best_prepared = candidate
+            best_rotation = rotation
+            best_label = label
+
+        return output.confidence >= confidence_floor
+
+    satisfied = try_attempt(prepared, label="прямо", rotation=0)
+
+    ladder_enabled = (
+        confidence_floor > 0.0
+        and not satisfied
+        and not timed_out
     )
-    image_path = Path(handle.name)
-    handle.close()
 
-    try:
-        prepared.image.save(image_path, format="PNG", optimize=False)
-
-        text = run_tesseract(
-            image_path,
-            binary=binary,
-            tessdata=tessdata,
-            languages=languages,
-            dpi=dpi,
-            psm=psm,
-            oem=oem,
-            threads=threads,
-            timeout_seconds=timeout_seconds,
+    if ladder_enabled:
+        deadline = (
+            started + ladder_budget_seconds
+            if ladder_budget_seconds > 0
+            else None
         )
 
-        return OcrPageResult(
-            text=text.strip(),
-            seconds=round(time.monotonic() - started, 2),
-            render_dpi=dpi,
-            megapixels=megapixels,
-            skew_degrees=prepared.skew_degrees,
-            ink_ratio=prepared.ink_ratio,
-            blank=False,
-        )
+        def budget_left() -> bool:
+            return deadline is None or time.monotonic() < deadline
 
-    except PageTimeoutError as exc:
+        # Ступень 1 — мягкий порог. Выцветшая копия с широкими светлыми
+        # штрихами при строгом пороге теряет половину чернил.
+        if (
+            binarize
+            and budget_left()
+            and abs(retry_sauvola_k - sauvola_k) > 1e-9
+        ):
+            satisfied = try_attempt(
+                prepare_page(
+                    source,
+                    deskew=deskew,
+                    binarize=True,
+                    sauvola_k=retry_sauvola_k,
+                ),
+                label=f"k={retry_sauvola_k:g}",
+                rotation=0,
+            )
+
+        # Ступень 2 — ориентация. Проверять её признаками изображения
+        # ненадёжно: на зашумлённой странице проекции по строкам и по
+        # столбцам различаются на единицы процентов, и признак ошибается.
+        # Сам Tesseract отвечает на этот вопрос точно, поэтому дешевле
+        # спросить его и сравнить уверенность.
+        for angle in retry_rotations:
+            if satisfied or not budget_left():
+                break
+
+            normalized_angle = int(angle) % 360
+
+            if normalized_angle == 0:
+                continue
+
+            satisfied = try_attempt(
+                prepare_page(
+                    source.rotate(
+                        normalized_angle,
+                        expand=True,
+                        fillcolor=255,
+                    ),
+                    deskew=deskew,
+                    binarize=binarize,
+                    sauvola_k=sauvola_k,
+                ),
+                label=f"поворот {normalized_angle}°",
+                rotation=normalized_angle,
+            )
+
+    seconds = round(elapsed(), 2)
+
+    if best_output is None:
         return OcrPageResult(
             text="",
-            seconds=round(time.monotonic() - started, 2),
+            seconds=seconds,
             render_dpi=dpi,
             megapixels=megapixels,
             skew_degrees=prepared.skew_degrees,
             ink_ratio=prepared.ink_ratio,
             blank=False,
-            timed_out=True,
-            error=str(exc),
+            timed_out=timed_out,
+            error=(
+                " | ".join(errors[:3])
+                if errors
+                else "Tesseract не вернул результата"
+            ),
+            method=prepared.method,
+            attempts=tuple(attempts),
         )
 
-    except Exception as exc:
-        return OcrPageResult(
-            text="",
-            seconds=round(time.monotonic() - started, 2),
-            render_dpi=dpi,
-            megapixels=megapixels,
-            skew_degrees=prepared.skew_degrees,
-            ink_ratio=prepared.ink_ratio,
-            blank=False,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-
-    finally:
-        image_path.unlink(missing_ok=True)
+    return OcrPageResult(
+        text=best_output.text.strip(),
+        seconds=seconds,
+        render_dpi=dpi,
+        megapixels=megapixels,
+        skew_degrees=best_prepared.skew_degrees,
+        ink_ratio=best_prepared.ink_ratio,
+        blank=False,
+        timed_out=timed_out,
+        error=" | ".join(errors[:3]) if errors else None,
+        confidence=best_output.confidence,
+        low_confidence_ratio=best_output.low_confidence_ratio,
+        word_count=best_output.words,
+        rotation=best_rotation,
+        method=f"{best_prepared.method}:{best_label}",
+        attempts=tuple(attempts),
+    )
 
 
 def page_order(page_count: int, *, priority_pages: int) -> list[int]:

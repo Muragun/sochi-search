@@ -60,6 +60,7 @@ ENTRY_POINTS = {
     "ops.validate_elasticsearch",
     "ops.reindex_v3",
     "ops.init_state",
+    "ops.ocr_benchmark",
 }
 
 
