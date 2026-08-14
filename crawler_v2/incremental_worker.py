@@ -8,7 +8,6 @@ import socket
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse

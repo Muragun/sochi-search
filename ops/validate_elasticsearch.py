@@ -134,6 +134,33 @@ SAMPLE_DOCUMENTS = [
         "chunk_number": 0,
         "hash": "b" * 64,
     },
+    {
+        # Номер записан так, как он приходит из строки «Номер документа»:
+        # со знаком номера, пробелами вокруг тире и латинской «p» из
+        # распознавания. Индекс обязан привести это к «84-рс».
+        "url": "https://sochi.ru/upload/doc-84.pdf",
+        "title": "Распоряжение о выделении помещения",
+        "attachment_title": "Распоряжение № 84-РС от 2 июня 2023 года",
+        "text": (
+            "Администрация города Сочи распоряжается выделить помещение "
+            "для работы комиссии по вопросам благоустройства территории. "
+            "Справка о составе семьи выдаётся заявителю."
+        ),
+        "document_number": "№ 84 – PC",
+        "document_kind": "распоряжение",
+        "document_date": "2023-06-02",
+        "sort_date": "2023-06-02",
+        "content_category": "legal",
+        "doc_type": "pdf",
+        "is_attachment": True,
+        "url_path": "/upload/doc-84.pdf",
+        "page_number": 1,
+        "chunk_number": 0,
+        "hash": "c" * 64,
+        "ocr_used": True,
+        "ocr_confidence": 91.4,
+        "text_extraction": "ocr",
+    },
 ]
 
 
@@ -219,6 +246,47 @@ def main() -> int:
             f"токены: {number_tokens}",
         )
 
+        # На индексной стороне граф обязан быть развёрнут: обратный индекс
+        # графов не хранит, и без flatten_graph часть вариантов теряется.
+        # Проверяем по positionLength: у развёрнутого графа он всегда 1.
+        explained = checker.request(
+            "POST",
+            f"{index}/_analyze",
+            body={
+                "analyzer": "document_number_index",
+                "text": "512-р",
+                "explain": True,
+            },
+        )
+        detail = explained.get("detail", {})
+        last_filter = (detail.get("tokenfilters") or [{}])[-1]
+        graph_widths = [
+            int(token.get("positionLength", 1) or 1)
+            for token in last_filter.get("tokens", [])
+        ]
+        checker.check(
+            "индексный анализатор номера не оставляет граф",
+            all(width == 1 for width in graph_widths),
+            f"positionLength: {graph_widths}",
+        )
+
+        canonical = checker.request(
+            "POST",
+            f"{index}/_analyze",
+            body={
+                "field": "document_number",
+                "text": "№ 512 – Р",
+            },
+        )
+        canonical_tokens = [
+            item["token"] for item in canonical.get("tokens", [])
+        ]
+        checker.check(
+            "«№ 512 – Р» нормализуется в «512-р»",
+            canonical_tokens == ["512-р"],
+            f"токены: {canonical_tokens}",
+        )
+
         stop_removed = tokens(checker, index, "russian_text", "и в на о")
         checker.check(
             "стоп-слова удаляются",
@@ -287,6 +355,70 @@ def main() -> int:
             "поиск по номеру акта находит нужный документ",
             bool(hits) and "512" in hits[0]["_source"].get("url", ""),
             f"попаданий: {len(hits)}",
+        )
+
+        # Номер, записанный со знаком номера, пробелами вокруг тире и
+        # латинскими буквами, должен находиться по канонической записи.
+        # Именно это раньше не работало: нормализатор индекса и функция
+        # запроса приводили номер к разному виду.
+        response = search(
+            build_search_body("84-рс", limit=10, offset=0)
+        )
+        hits = response["hits"]["hits"]
+        checker.check(
+            "«№ 84 – PC» находится по запросу «84-рс»",
+            bool(hits) and "doc-84" in hits[0]["_source"].get("url", ""),
+            f"попаданий: {len(hits)}",
+        )
+
+        stored = search(
+            {
+                "query": {"term": {"document_number": "84-рс"}},
+                "size": 1,
+            }
+        )
+        checker.check(
+            "нормализатор схемы приводит «№ 84 – PC» к «84-рс»",
+            stored["hits"]["total"]["value"] >= 1,
+            "терм не совпал — цепочка char_filter расходится с запросом",
+        )
+
+        # Кавычки: фраза целиком обязана быть в документе.
+        response = search(
+            build_search_body(
+                "«справка о составе семьи»", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "точная фраза в кавычках находит документ",
+            response["hits"]["total"]["value"] >= 1,
+            json.dumps(response["hits"]["total"], ensure_ascii=False),
+        )
+
+        response = search(
+            build_search_body(
+                "«семьи составе о справка»", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "переставленная фраза в кавычках не находится",
+            response["hits"]["total"]["value"] == 0,
+            "кавычки не сужают выдачу",
+        )
+
+        # Минус-слово: документ с этим словом обязан исчезнуть.
+        response = search(
+            build_search_body(
+                "благоустройства -комиссии", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "минус-слово убирает документ из выдачи",
+            all(
+                "комиссии" not in hit["_source"].get("text", "")
+                for hit in response["hits"]["hits"]
+            ),
+            "документ со словом «комиссии» остался в выдаче",
         )
 
         response = search(

@@ -133,6 +133,42 @@ class ModuleWiringTests(unittest.TestCase):
                     ),
                 )
 
+    def test_no_unexpected_python_packages(self) -> None:
+        """
+        Проверка орфанов смотрит только в три пакета — значит, четвёртый
+        пройдёт мимо неё целиком.
+
+        Ровно так и вышло: пакет `app/` — первая версия сервиса, десять
+        модулей — оставался в репозитории после переезда на `app_v2`. Его
+        не собирал Dockerfile, не запускал ни один юнит, на него не
+        ссылались ни тесты, ни README, а `.env.example` документировал его
+        переменные (`ELASTIC_URL`, `INDEX_NAME`, `APP_HOST`), которых в
+        текущем коде нет. Тест на неподключённые модули его не видел,
+        потому что искал в списке из трёх имён.
+        """
+
+        expected = {"crawler_v2", "app_v2", "ops", "tests"}
+        found = {
+            path.parent.name
+            for path in SOURCE.glob("*/__init__.py")
+        } | {
+            path.name
+            for path in SOURCE.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and any(path.glob("*.py"))
+        }
+
+        self.assertEqual(
+            found - expected,
+            set(),
+            msg=(
+                "Появился пакет Python вне списка проверяемых. Либо "
+                "добавьте его в python_files(), либо удалите: иначе "
+                "проверка связок его не увидит"
+            ),
+        )
+
     def test_no_orphan_modules(self) -> None:
         """Каждый модуль либо точка входа, либо кем-то импортируется."""
         all_modules = {module_name(p): p for p in python_files()}

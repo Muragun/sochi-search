@@ -527,10 +527,9 @@ def extract_published_at(
     )
 
     if element is None:
-        from crawler_v2.legal_metadata import (
-            extract_labeled_value,
-            parse_russian_date,
-        )
+        # `parse_russian_date` уже импортирован на уровне модуля; локальный
+        # импорт только заслонял его тем же именем.
+        from crawler_v2.legal_metadata import extract_labeled_value
 
         return parse_russian_date(
             extract_labeled_value(

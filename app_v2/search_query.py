@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 # Нормализация номера акта общая с обходчиком.
 #
@@ -36,10 +36,7 @@ from typing import Any, Iterable
 # искался как «512-р». Точное совпадение с весом 40 срабатывало на двух
 # написаниях из семи. Теперь обе стороны считают одной функцией, а обходчик
 # кладёт результат в отдельное поле `document_number_normalized`.
-from crawler_v2.text_repair import (
-    DASHES,
-    normalize_document_number,
-)
+from crawler_v2.text_repair import normalize_document_number
 
 SEARCH_FACET_CATEGORIES = (
     "news",
@@ -245,10 +242,6 @@ class ParsedQuery:
     text: str
     phrases: tuple[str, ...]
     excluded: tuple[str, ...]
-
-    @property
-    def is_empty(self) -> bool:
-        return not (self.text or self.phrases)
 
 
 def parse_query(query: str) -> ParsedQuery:
