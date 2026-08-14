@@ -269,6 +269,56 @@ def repair_ocr_text(
     return unicodedata.normalize("NFC", text)
 
 
+DASHES = "‐‑‒–—―−"
+
+NUMBER_PREFIX_RE = re.compile(
+    r"^\s*(?:№|N[оo]?\.?)\s*",
+    flags=re.IGNORECASE,
+)
+
+# Латинские двойники в номерах актов приводятся к кириллице целиком, без
+# оглядки на остальные буквы: номер в этом корпусе всегда русский.
+NUMBER_HOMOGLYPHS = str.maketrans(
+    {
+        "p": "р", "P": "р", "c": "с", "C": "с",
+        "a": "а", "A": "а", "o": "о", "O": "о",
+        "e": "е", "E": "е", "x": "х", "X": "х",
+        "y": "у", "Y": "у", "k": "к", "K": "к",
+        "m": "м", "M": "м", "t": "т", "T": "т",
+        "h": "н", "H": "н", "b": "в", "B": "в",
+    }
+)
+
+
+def normalize_document_number(value: str) -> str:
+    """
+    Приводит «№ 512 – Р», «N512-P» и «512р» к одному виду.
+
+    Единственная реализация на весь проект. Раньше их было две: одна
+    строила запрос, вторая — нормализатор Elasticsearch в схеме индекса, и
+    они расходились. Из семи способов записать один и тот же номер точное
+    совпадение срабатывало на двух: «№ 512-р» лежал в индексе как
+    «№  512-р», а искался как «512-р».
+
+    Поэтому и запрос, и поле `document_number_normalized` считаются здесь.
+    Совпадение перестаёт зависеть от того, как номер записан в источнике.
+    """
+
+    normalized = str(value or "").strip()
+    normalized = normalized.replace(" ", " ")
+
+    for dash in DASHES:
+        normalized = normalized.replace(dash, "-")
+
+    normalized = NUMBER_PREFIX_RE.sub("", normalized)
+    normalized = normalized.translate(NUMBER_HOMOGLYPHS)
+
+    normalized = re.sub(r"\s*-\s*", "-", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+
+    return normalized.strip().casefold()
+
+
 def count_mixed_script_tokens(value: str) -> int:
     """Сколько токенов смешивают письменности. Нужно для отчётов и тестов."""
 

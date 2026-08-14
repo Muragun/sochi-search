@@ -521,7 +521,27 @@ from .search_query import (  # noqa: E402
     SEARCH_FACET_CATEGORIES,
     build_fuzzy_search_body,
     build_search_body,
+    parse_query,
 )
+
+
+def snippet_query(query: str) -> str:
+    """
+    Запрос без служебных знаков — для поиска места в тексте.
+
+    Фрагмент вокруг совпадения ищется обычным `str.find`, и кавычки с
+    минусами в строке ему только мешают: «состав семьи» в ёлочках в тексте
+    документа не встречается никогда. Берём содержимое кавычек и обычные
+    слова, исключения выбрасываем.
+    """
+
+    parsed = parse_query(query)
+    parts = [phrase for phrase in parsed.phrases]
+
+    if parsed.text:
+        parts.append(parsed.text)
+
+    return " ".join(parts).strip() or normalize_text(query)
 
 SEARCH_FACET_LABELS = {
     "all": "Все",
@@ -1154,6 +1174,10 @@ def search_documents(
 
     used_urls: set[str] = set()
 
+    # Кавычки и минус-слова нужны построителю запроса, но не поиску места
+    # в тексте фрагмента.
+    fragment_query = snippet_query(query)
+
     for raw_hit in raw_hits:
         if not isinstance(
             raw_hit,
@@ -1163,7 +1187,7 @@ def search_documents(
 
         item = normalize_hit(
             raw_hit,
-            query,
+            fragment_query,
         )
 
         url = str(

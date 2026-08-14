@@ -58,7 +58,7 @@ ENTRY_POINTS = {
     "ops.verify_backup",
     "ops.wait_for_elasticsearch",
     "ops.validate_elasticsearch",
-    "ops.reindex_v3",
+    "ops.reindex",
     "ops.init_state",
     "ops.ocr_benchmark",
 }

@@ -217,7 +217,7 @@ class RuntimeReliabilityTests(unittest.TestCase):
         for marker in (
             "ADMIN_PASSWORD_SHA256",
             "API_BIND",
-            "reindex_v3 --bootstrap",
+            "reindex --bootstrap",
             "vm.max_map_count",
         ):
             self.assertIn(marker, deploy)

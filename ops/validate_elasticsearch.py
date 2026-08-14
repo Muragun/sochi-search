@@ -9,7 +9,7 @@
 Запуск:
 
     python -m ops.validate_elasticsearch \\
-        --mapping elasticsearch/sochi_docs_v3.json
+        --mapping elasticsearch/sochi_docs_v4.json
 """
 
 from __future__ import annotations

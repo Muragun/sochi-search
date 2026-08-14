@@ -1,5 +1,5 @@
 """
-Построение запроса к Elasticsearch для индекса `sochi_docs_v3`.
+Построение запроса к Elasticsearch для индекса `sochi_docs_v4`.
 
 Заменяет прежнюю конструкцию из одиннадцати `should`-веток. Проблемы прежней
 схемы:
@@ -26,9 +26,20 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Iterable
 
-DASHES = "‐‑‒–—―−"
+# Нормализация номера акта общая с обходчиком.
+#
+# Раньше запрос нормализовал номер здесь, а индекс — нормализатором в схеме,
+# и две реализации расходились: «№ 512-р» попадал в индекс как «№  512-р», а
+# искался как «512-р». Точное совпадение с весом 40 срабатывало на двух
+# написаниях из семи. Теперь обе стороны считают одной функцией, а обходчик
+# кладёт результат в отдельное поле `document_number_normalized`.
+from crawler_v2.text_repair import (
+    DASHES,
+    normalize_document_number,
+)
 
 SEARCH_FACET_CATEGORIES = (
     "news",
@@ -73,40 +84,6 @@ DOCUMENT_NUMBER_RE = re.compile(
 )
 
 
-def normalize_document_number(value: str) -> str:
-    """Приводит «№ 512 – Р», «N512-P» и «512р» к одному виду."""
-
-    normalized = str(value or "").strip()
-    normalized = normalized.replace(" ", " ")
-
-    for dash in DASHES:
-        normalized = normalized.replace(dash, "-")
-
-    normalized = re.sub(
-        r"^\s*(?:№|N[оo]?\.?)\s*",
-        "",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-
-    # Латинские близнецы кириллических букв в номерах актов.
-    table = str.maketrans(
-        {
-            "p": "р", "P": "р", "c": "с", "C": "с",
-            "a": "а", "A": "а", "o": "о", "O": "о",
-            "e": "е", "E": "е", "x": "х", "X": "х",
-            "y": "у", "Y": "у", "k": "к", "K": "к",
-            "m": "м", "M": "м", "t": "т", "T": "т",
-            "h": "н", "H": "н", "b": "в", "B": "в",
-        }
-    )
-    normalized = normalized.translate(table)
-
-    normalized = re.sub(r"\s*-\s*", "-", normalized)
-    normalized = re.sub(r"\s+", " ", normalized)
-
-    return normalized.strip().casefold()
-
 
 def looks_like_document_number(query: str) -> bool:
     return bool(DOCUMENT_NUMBER_RE.search(query or ""))
@@ -121,14 +98,30 @@ def document_number_clauses(value: str, *, boost: float) -> list[dict[str, Any]]
     compact = normalized.replace("-", "")
 
     return [
+        # Точное совпадение по каноническому виду номера. Поле заполняет
+        # обходчик той же функцией, что нормализует запрос, поэтому
+        # написание в источнике роли не играет.
         {
             "term": {
-                "document_number": {
+                "document_number_normalized": {
                     "value": normalized,
                     "boost": boost,
                 }
             }
         },
+
+        # Прежнее поле остаётся в запросе ради документов, перенесённых со
+        # схемы v3: у них `document_number_normalized` появляется только
+        # после переиндексации. Вес ниже — это запасной путь.
+        {
+            "term": {
+                "document_number": {
+                    "value": normalized,
+                    "boost": boost * 0.8,
+                }
+            }
+        },
+
         {
             "match": {
                 "document_number.text": {
@@ -236,6 +229,82 @@ def build_filters(
     return filters
 
 
+QUOTED_PHRASE_RE = re.compile(
+    r"[«\"“]([^«»\"“”]{2,120})[»\"”]"
+)
+
+EXCLUDED_TERM_RE = re.compile(
+    r"(?:^|\s)[-−–—]([^\s\"«»]{2,60})"
+)
+
+
+@dataclass(frozen=True)
+class ParsedQuery:
+    """Запрос, разобранный на обычные слова, цитаты и исключения."""
+
+    text: str
+    phrases: tuple[str, ...]
+    excluded: tuple[str, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.text or self.phrases)
+
+
+def parse_query(query: str) -> ParsedQuery:
+    """
+    Выделяет из строки запроса кавычки и минус-слова.
+
+    До этого кавычки и минусы попадали в `multi_match` как обычные символы:
+    `standard`-токенизатор их выбрасывал, и «состав семьи» в кавычках искалось
+    ровно так же, как без них. Сотрудник, который взял фразу в кавычки, хотел
+    сузить выдачу, а получал ту же самую.
+
+    Разбор намеренно скромный: кавычки — точная фраза, минус перед словом —
+    исключение. Полноценный синтаксис (`AND`, `OR`, скобки) здесь был бы
+    лишним: он требует объяснения, а `query_string` с пользовательским
+    вводом ещё и падает на несбалансированной скобке.
+
+    Минус распознаётся только после пробела или в начале строки, поэтому
+    «512-р» и «город-курорт» остаются целыми словами.
+    """
+
+    raw = (query or "").strip()
+
+    if not raw:
+        return ParsedQuery(text="", phrases=(), excluded=())
+
+    phrases: list[str] = []
+
+    def take_phrase(match: "re.Match[str]") -> str:
+        phrase = match.group(1).strip()
+
+        if phrase:
+            phrases.append(phrase)
+
+        return " "
+
+    remainder = QUOTED_PHRASE_RE.sub(take_phrase, raw)
+
+    excluded: list[str] = []
+
+    def take_excluded(match: "re.Match[str]") -> str:
+        term = match.group(1).strip()
+
+        if term:
+            excluded.append(term)
+
+        return " "
+
+    remainder = EXCLUDED_TERM_RE.sub(take_excluded, remainder)
+
+    return ParsedQuery(
+        text=re.sub(r"\s+", " ", remainder).strip(),
+        phrases=tuple(dict.fromkeys(phrases)),
+        excluded=tuple(dict.fromkeys(excluded)),
+    )
+
+
 def build_query(query: str, filters: list[dict[str, Any]]) -> dict[str, Any]:
     raw_query = (query or "").strip()
 
@@ -245,6 +314,13 @@ def build_query(query: str, filters: list[dict[str, Any]]) -> dict[str, Any]:
             if filters
             else {"match_all": {}}
         )
+
+    parsed = parse_query(raw_query)
+
+    # Цитаты и исключения строятся отдельно, а из запроса убираются: иначе
+    # кавычки и минусы уходили бы в `multi_match` как обычные символы.
+    if parsed.phrases or parsed.excluded:
+        return build_structured_query(parsed, raw_query, filters)
 
     # Обязательная часть: слова запроса должны найтись хотя бы в одном из
     # содержательных полей. `cross_fields` считает поля одним текстом, поэтому
@@ -282,12 +358,40 @@ def build_query(query: str, filters: list[dict[str, Any]]) -> dict[str, Any]:
                 }
             }
         },
+
+        # У PDF содержательное название лежит в `attachment_title`: в
+        # `title` при этом стоит либо имя файла, либо общий заголовок
+        # страницы. Без этой ветки скан постановления проигрывал в выдаче
+        # HTML-странице, которая на него только ссылается.
+        {
+            "match_phrase": {
+                "attachment_title.exact": {
+                    "query": raw_query,
+                    "boost": 10,
+                    "slop": 1,
+                }
+            }
+        },
         {
             "match_phrase": {
                 "text.exact": {
                     "query": raw_query,
                     "boost": 6,
                     "slop": 2,
+                }
+            }
+        },
+
+        # Та же близость слов, но по леммам. `.exact` не срабатывает на
+        # «благоустройству территории», когда спрашивали «благоустройство
+        # территории», хотя это тот же документ и слова стоят рядом.
+        # Вес ниже точной формы: она остаётся предпочтительной.
+        {
+            "match_phrase": {
+                "text": {
+                    "query": raw_query,
+                    "boost": 3,
+                    "slop": 3,
                 }
             }
         },
@@ -314,6 +418,141 @@ def build_query(query: str, filters: list[dict[str, Any]]) -> dict[str, Any]:
 
     if filters:
         bool_query["filter"] = filters
+
+    return {"bool": bool_query}
+
+
+def phrase_clauses(
+    phrase: str,
+    *,
+    slop: int = 0,
+) -> list[dict[str, Any]]:
+    """Фраза ищется и по точной словоформе, и по лемме."""
+
+    return [
+        {
+            "match_phrase": {
+                "text.exact": {
+                    "query": phrase,
+                    "slop": slop,
+                }
+            }
+        },
+        {
+            "match_phrase": {
+                "text": {
+                    "query": phrase,
+                    "slop": slop,
+                }
+            }
+        },
+        {
+            "match_phrase": {
+                "title.exact": {
+                    "query": phrase,
+                    "slop": slop,
+                }
+            }
+        },
+        {
+            "match_phrase": {
+                "attachment_title.exact": {
+                    "query": phrase,
+                    "slop": slop,
+                }
+            }
+        },
+    ]
+
+
+def build_structured_query(
+    parsed: ParsedQuery,
+    raw_query: str,
+    filters: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Запрос с кавычками или минус-словами.
+
+    Каждая цитата обязательна: документ обязан содержать её целиком хотя бы
+    в одном из полей. Поэтому `must` на каждую фразу, а внутри — `should`
+    по полям.
+
+    Точная словоформа и лемма проверяются обе. Только `.exact` отсекала бы
+    «о благоустройстве территории» при запросе «благоустройство территории»,
+    а только лемма — стирала бы разницу, ради которой кавычки и ставят.
+    """
+
+    must: list[dict[str, Any]] = []
+
+    for phrase in parsed.phrases:
+        must.append(
+            {
+                "bool": {
+                    "should": phrase_clauses(phrase),
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+
+    # Слова вне кавычек остаются обычным запросом, но обязательными уже не
+    # являются: цитата задаёт выдачу, остальное её упорядочивает.
+    should: list[dict[str, Any]] = []
+
+    if parsed.text:
+        if not must:
+            must.append(
+                {
+                    "multi_match": {
+                        "query": parsed.text,
+                        "type": "cross_fields",
+                        "fields": list(QUERY_FIELDS),
+                        "minimum_should_match": "3<75%",
+                    }
+                }
+            )
+        else:
+            should.append(
+                {
+                    "multi_match": {
+                        "query": parsed.text,
+                        "type": "cross_fields",
+                        "fields": list(QUERY_FIELDS),
+                        "boost": 2,
+                    }
+                }
+            )
+
+    if looks_like_document_number(raw_query):
+        should.extend(
+            document_number_clauses(raw_query, boost=40)
+        )
+
+    bool_query: dict[str, Any] = {"must": must}
+
+    if should:
+        bool_query["should"] = should
+
+    if parsed.excluded:
+        bool_query["must_not"] = [
+            {
+                "multi_match": {
+                    "query": term,
+                    "type": "cross_fields",
+                    "fields": list(FUZZY_FIELDS),
+                    "operator": "and",
+                }
+            }
+            for term in parsed.excluded
+        ]
+
+    if filters:
+        bool_query["filter"] = filters
+
+    # Запрос из одних минус-слов выдал бы весь корпус. Такое сочетание
+    # бессмысленно, но приходит из адресной строки, поэтому обрабатывается
+    # явно, а не падает в `must: []`.
+    if not must:
+        bool_query["must"] = [{"match_all": {}}]
 
     return {"bool": bool_query}
 
@@ -417,6 +656,7 @@ def build_search_body(
             "published_at",
             "sort_date",
             "document_number",
+            "document_number_normalized",
             "document_date",
             "document_kind",
             "is_attachment",

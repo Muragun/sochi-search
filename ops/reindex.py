@@ -1,10 +1,15 @@
 """
-Перенос индекса на mapping `sochi_docs_v3` без повторного обхода сайта.
+Перенос индекса на новую схему без повторного обхода сайта.
 
 Текст, уже извлечённый из HTML и PDF, лежит в Elasticsearch. Менять нужно
 разбор этого текста — анализаторы, поля, подсветку, — а не сам текст, поэтому
 `_reindex` внутри кластера дешевле повторного скачивания десятков тысяч
 страниц. Качество OCR у старых PDF доводится отдельно, фоновым backfill.
+
+Схема задаётся ключом `--mapping`, поэтому модуль не привязан к её номеру.
+Раньше он назывался `reindex_v3` и при этом создавал уже v4: имя с номером
+устаревает молча, ровно как устарел тест, сверявшийся со строкой
+«pdf-ocr-v5».
 
 Порядок:
 
@@ -95,11 +100,15 @@ if (url == null) {
         }
     }
 }
+
 """
 
 CONTROL_QUERIES = [
     ("поиск по слову с ё", {"query": {"match": {"text": "ёлка"}}}),
-    ("поиск по номеру акта", {"query": {"term": {"document_number": "512-р"}}}),
+    (
+        "поиск по номеру акта",
+        {"query": {"term": {"document_number_normalized": "512-р"}}},
+    ),
     ("фильтр рубрики", {"query": {"term": {"content_category": "legal"}}}),
     ("вложения", {"query": {"term": {"is_attachment": True}}}),
 ]
@@ -391,12 +400,12 @@ def main() -> int:
     parser.add_argument("--source", default="")
     parser.add_argument(
         "--destination",
-        default=f"sochi_docs_v3_{date.today():%Y%m%d}",
+        default=f"sochi_docs_v4_{date.today():%Y%m%d}",
     )
     parser.add_argument(
         "--mapping",
         type=Path,
-        default=Path("elasticsearch/sochi_docs_v3.json"),
+        default=Path("elasticsearch/sochi_docs_v4.json"),
     )
     parser.add_argument("--slices", type=int, default=2)
     parser.add_argument("--poll-seconds", type=int, default=15)

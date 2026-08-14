@@ -150,8 +150,8 @@ if curl -fsS "http://127.0.0.1:9200/${ES_INDEX:-sochi_search}/_count" >/dev/null
     echo "  индекс ${ES_INDEX:-sochi_search} уже существует, пропускаю"
 else
     $COMPOSE run --rm --no-deps api \
-        python -B -m ops.reindex_v3 --bootstrap \
-            --mapping elasticsearch/sochi_docs_v3.json
+        python -B -m ops.reindex --bootstrap \
+            --mapping elasticsearch/sochi_docs_v4.json
 fi
 
 

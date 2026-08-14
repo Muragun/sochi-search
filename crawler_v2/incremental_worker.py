@@ -33,6 +33,7 @@ from .legal_metadata import (
     extract_legal_title_metadata,
 )
 from .pdf_ocr import PDF_EXTRACTION_VERSION
+from .text_repair import normalize_document_number
 from .incremental_db import (
     IncrementalStateDatabase,
     iso_after_hours,
@@ -685,6 +686,16 @@ def build_documents(
         content.unreadable_pages
     )
 
+    # Канонический вид номера акта — той же функцией, что нормализует
+    # запрос. Без него точное совпадение зависело от того, как номер
+    # записан в источнике: «№ 512-р» попадал в индекс как «№  512-р», а
+    # искался как «512-р», и точное совпадение с весом 40 не срабатывало.
+    normalized_document_number = (
+        normalize_document_number(document_number) or None
+        if document_number
+        else None
+    )
+
     # Средняя уверенность Tesseract по распознанным страницам документа.
     #
     # None, а не ноль, когда OCR не запускался: ноль в поле `float`
@@ -744,6 +755,9 @@ def build_documents(
                 ),
 
                 "document_number": document_number,
+                "document_number_normalized": (
+                    normalized_document_number
+                ),
                 "document_date": document_date,
                 "document_kind": document_kind,
 
