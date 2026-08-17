@@ -138,16 +138,19 @@ class ModuleWiringTests(unittest.TestCase):
         Проверка орфанов смотрит только в три пакета — значит, четвёртый
         пройдёт мимо неё целиком.
 
-        Ровно так и вышло: пакет `app/` — первая версия сервиса, десять
-        модулей — оставался в репозитории после переезда на `app_v2`. Его
-        не собирал Dockerfile, не запускал ни один юнит, на него не
-        ссылались ни тесты, ни README, а `.env.example` документировал его
-        переменные (`ELASTIC_URL`, `INDEX_NAME`, `APP_HOST`), которых в
-        текущем коде нет. Тест на неподключённые модули его не видел,
-        потому что искал в списке из трёх имён.
+        Пакет `app/` — первая версия сервиса. В репозитории на него ничто
+        не ссылается: его не собирает Dockerfile, нет его и в юнитах из
+        `systemd/`. По этим признакам он выглядит мёртвым, и однажды был
+        удалён как мёртвый.
+
+        На рабочем сервере он живой. Юнит `sochi-search.service`
+        (`ExecStart=/opt/sochi-search/app/run_api.sh`) поднимает его на
+        отдельном порту рядом с `app_v2`, и в репозитории этого юнита
+        нет — он заведён на машине руками. Отсюда правило: пакет держится
+        в списке ожидаемых, а не удаляется, пока служба не остановлена.
         """
 
-        expected = {"crawler_v2", "app_v2", "ops", "tests"}
+        expected = {"crawler_v2", "app_v2", "ops", "tests", "app"}
         found = {
             path.parent.name
             for path in SOURCE.glob("*/__init__.py")
@@ -194,6 +197,60 @@ class ModuleWiringTests(unittest.TestCase):
             msg=(
                 "Эти модули никем не используются и не заявлены как "
                 f"точки входа: {orphans}"
+            ),
+        )
+
+
+class LegacyApiCompatibilityTests(unittest.TestCase):
+    """
+    Первая версия API ходит в тот же индекс.
+
+    `sochi-search.service` поднимает `app/api.py` рядом с `app_v2` и
+    спрашивает alias `sochi_docs` — тот самый, который переключается на
+    новую схему. Поля, по которым он ищет и которые забирает в `_source`,
+    обязаны существовать в схеме: иначе переключение alias молча оставит
+    старый API с пустой выдачей.
+
+    Тест держит эту зависимость видимой. Когда службу остановят, его
+    нужно удалить вместе с пакетом `app/`.
+    """
+
+    @staticmethod
+    def schema_properties() -> set:
+        import json
+
+        path = (
+            SOURCE / "elasticsearch" / "sochi_docs_v4.json"
+        )
+        schema = json.loads(path.read_text(encoding="utf-8"))
+
+        return set(schema["mappings"]["properties"])
+
+    def test_legacy_api_fields_exist_in_schema(self) -> None:
+        source = (SOURCE / "app" / "api.py").read_text(encoding="utf-8")
+
+        # Поля из `_source` и из `multi_match`, без весов вида `title^4`.
+        quoted = set(re.findall(r'"([a-z_]+)\^?\d*"', source))
+        properties = self.schema_properties()
+
+        checked = quoted & {
+            "title", "section", "text", "source", "doc_type",
+            "page_url", "file_url", "url", "page_number",
+            "chunk_number", "updated_at", "content_type",
+        }
+
+        self.assertTrue(
+            checked,
+            "не нашлось ни одного поля — разбор app/api.py сломался",
+        )
+
+        self.assertEqual(
+            sorted(checked - properties),
+            [],
+            msg=(
+                "app/api.py ищет по полям, которых нет в схеме индекса. "
+                "После переключения alias служба sochi-search.service "
+                "останется с пустой выдачей"
             ),
         )
 

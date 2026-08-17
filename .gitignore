@@ -1,6 +1,7 @@
 # Секреты. Рабочий .env содержит хеш пароля и в git не попадает.
 .env
 .env.*
+!.env.example
 !.env.production.example
 
 # Состояние, а не код
