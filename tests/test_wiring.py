@@ -20,8 +20,13 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compat import standard_library_modules, unparse  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -199,6 +204,81 @@ class ModuleWiringTests(unittest.TestCase):
                 f"точки входа: {orphans}"
             ),
         )
+
+
+class TestSuiteRunsOnPython38Tests(unittest.TestCase):
+    """
+    Набор тестов обязан запускаться там, где работает система.
+
+    Проект заявляет 3.8, и на сервере стоит именно 3.8. При этом сами
+    тесты пользовались `ast.unparse` (3.9) и `sys.stdlib_module_names`
+    (3.10): на машине разработчика с 3.11 всё было зелено, на сервере
+    три проверки падали. Получалось, что проверить систему на той версии,
+    на которой она работает, нельзя — а это единственная проверка, что
+    выкладка не сломает API.
+
+    Версионные вызовы допускаются только в `tests/compat.py`: там они
+    закрыты проверкой наличия и запасным путём.
+    """
+
+    # Имя — версия, в которой оно появилось.
+    TOO_NEW = {
+        "unparse": "3.9",
+        "stdlib_module_names": "3.10",
+        "removeprefix": "3.9",
+        "removesuffix": "3.9",
+        "pairwise": "3.10",
+        "cache": "3.9",
+    }
+
+    def test_suite_avoids_newer_than_38_apis(self) -> None:
+        problems: list[str] = []
+
+        for path in sorted((SOURCE / "tests").glob("*.py")):
+            if path.name == "compat.py":
+                continue
+
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute):
+                    continue
+
+                since = self.TOO_NEW.get(node.attr)
+
+                if since is None:
+                    continue
+
+                problems.append(
+                    f"{path.name}:{node.lineno}: .{node.attr} "
+                    f"появился в Python {since}"
+                )
+
+        self.assertEqual(
+            problems,
+            [],
+            msg=(
+                "Тесты пользуются тем, чего нет в Python 3.8, — на "
+                "сервере они упадут. Замена есть в tests/compat.py: "
+                + "; ".join(problems)
+            ),
+        )
+
+    def test_whole_suite_parses_as_python_38(self) -> None:
+        problems: list[str] = []
+
+        for path in sorted((SOURCE / "tests").glob("*.py")):
+            try:
+                ast.parse(
+                    path.read_text(encoding="utf-8"),
+                    feature_version=(3, 8),
+                )
+            except SyntaxError as error:
+                problems.append(
+                    f"{path.name}:{error.lineno}: {error.msg}"
+                )
+
+        self.assertEqual(problems, [], msg="; ".join(problems))
 
 
 class LegacyApiCompatibilityTests(unittest.TestCase):
@@ -683,9 +763,11 @@ class RequirementsTests(unittest.TestCase):
         )
 
     def test_every_third_party_import_is_declared(self) -> None:
-        import sys
-
-        standard = set(getattr(sys, "stdlib_module_names", ()))
+        # `sys.stdlib_module_names` появился в 3.10. На 3.8, где проект
+        # и работает, `getattr(..., ())` отдавал пустое множество, и
+        # незаявленными считались все сорок стандартных модулей — от
+        # `json` до `sqlite3`.
+        standard = standard_library_modules()
         missing = sorted(
             name
             for name in self.imported_modules()
@@ -727,22 +809,22 @@ class Python38RuntimeAnnotationTests(unittest.TestCase):
 
         for item in ast.walk(node):
             if isinstance(item, ast.BinOp) and isinstance(item.op, ast.BitOr):
-                found.append(ast.unparse(item))
+                found.append(unparse(item))
 
             if (
                 isinstance(item, ast.Subscript)
                 and isinstance(item.value, ast.Name)
                 and item.value.id in self.BUILTIN_GENERICS
             ):
-                found.append(ast.unparse(item))
+                found.append(unparse(item))
 
         return found
 
     @staticmethod
     def is_route_handler(node: ast.AST) -> bool:
         return any(
-            "router" in ast.unparse(decorator)
-            or ast.unparse(decorator).startswith("app.")
+            "router" in unparse(decorator)
+            or unparse(decorator).startswith("app.")
             for decorator in node.decorator_list
         )
 
@@ -774,7 +856,7 @@ class Python38RuntimeAnnotationTests(unittest.TestCase):
                         )
 
                 if isinstance(node, ast.ClassDef) and any(
-                    "BaseModel" in ast.unparse(base) for base in node.bases
+                    "BaseModel" in unparse(base) for base in node.bases
                 ):
                     found = []
 
