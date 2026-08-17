@@ -212,7 +212,51 @@ def start_reindex(
     return task
 
 
-def wait_for_task(client: Client, task: str, *, poll_seconds: int) -> None:
+def task_progress(status: dict[str, Any]) -> tuple[int, int]:
+    """
+    Сколько документов перенесено и сколько всего.
+
+    У нарезанного `_reindex` (`slices` больше единицы) счётчики лежат в
+    подзадачах, а верхнеуровневые остаются нулями. Монитор читал только
+    верхние и показывал «0/0» до самого конца — на рабочем кластере
+    8.19.17 это выглядело как зависший перенос, хотя он шёл нормально.
+
+    Записи подзадач бывают пустыми: срез, который ещё не начался,
+    приходит как `null`.
+    """
+
+    slices = status.get("slices") or []
+
+    if slices:
+        total = 0
+        done = 0
+
+        for entry in slices:
+            if not isinstance(entry, dict):
+                continue
+
+            total += int(entry.get("total", 0) or 0)
+            done += (
+                int(entry.get("created", 0) or 0)
+                + int(entry.get("updated", 0) or 0)
+            )
+
+        return done, total
+
+    return (
+        int(status.get("created", 0) or 0)
+        + int(status.get("updated", 0) or 0),
+        int(status.get("total", 0) or 0),
+    )
+
+
+def wait_for_task(
+    client: Client,
+    task: str,
+    *,
+    poll_seconds: int,
+    destination: str = "",
+) -> None:
     while True:
         result = client.request("GET", f"_tasks/{task}")
 
@@ -241,15 +285,22 @@ def wait_for_task(client: Client, task: str, *, poll_seconds: int) -> None:
             return
 
         status = result.get("task", {}).get("status", {})
-        total = int(status.get("total", 0) or 0)
-        done = (
-            int(status.get("created", 0) or 0)
-            + int(status.get("updated", 0) or 0)
-        )
+        done, total = task_progress(status)
         percent = (done / total * 100) if total else 0.0
 
+        # Число документов в целевом индексе — независимая мера того, что
+        # перенос идёт. Счётчики задачи можно прочитать неверно, а это
+        # цифра из самого индекса.
+        indexed = ""
+
+        if destination:
+            try:
+                indexed = f", в индексе {client.count(destination)}"
+            except RuntimeError:
+                indexed = ""
+
         print(
-            f"  прогресс: {done}/{total} ({percent:.1f}%)",
+            f"  прогресс: {done}/{total} ({percent:.1f}%){indexed}",
             flush=True,
         )
         time.sleep(poll_seconds)
@@ -515,6 +566,7 @@ def main() -> int:
             client,
             task,
             poll_seconds=arguments.poll_seconds,
+            destination=arguments.destination,
         )
         finalize(client, index=arguments.destination)
 
