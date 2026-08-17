@@ -102,11 +102,15 @@ if (url == null) {
 
 """
 
+# Контрольные запросы не должны зависеть от того, какие именно документы
+# лежат в корпусе. Здесь был `term` по номеру «512-р» — синтетическому
+# примеру из тестов: ноль в ответе означал не поломку, а отсутствие акта
+# с таким номером, и отличить одно от другого было нельзя.
 CONTROL_QUERIES = [
     ("поиск по слову с ё", {"query": {"match": {"text": "ёлка"}}}),
     (
-        "поиск по номеру акта",
-        {"query": {"term": {"document_number_normalized": "512-р"}}},
+        "документы с номером акта",
+        {"query": {"exists": {"field": "document_number"}}},
     ),
     ("фильтр рубрики", {"query": {"term": {"content_category": "legal"}}}),
     ("вложения", {"query": {"term": {"is_attachment": True}}}),
@@ -437,6 +441,30 @@ def verify(
 
     print(f"  без рубрики: {empty_category}")
 
+    # Каноническое поле номера заполняет обходчик. У перенесённых
+    # документов его нет и не должно быть: точное совпадение по ним
+    # обеспечивает нормализатор схемы поверх `document_number`. Печатаем
+    # цифру, чтобы было видно, как поле наполняется по мере обхода.
+    normalized = client.request(
+        "POST",
+        f"{destination}/_search",
+        body={
+            "size": 0,
+            "track_total_hits": True,
+            "query": {"exists": {"field": "document_number_normalized"}},
+        },
+    )["hits"]["total"]["value"]
+
+    print(
+        f"  номера в каноническом виде: {normalized}"
+        + (
+            " (заполняется обходчиком, сразу после переноса ноль — "
+            "это нормально)"
+            if not normalized
+            else ""
+        )
+    )
+
     if empty_category:
         print("  [FAIL] остались документы без content_category")
         ok = False
@@ -465,8 +493,12 @@ def switch_alias(
         f"ALIAS_SWITCHED alias={alias} "
         f"from={','.join(previous) or '(нет)'} to={destination}"
     )
+    # Имя модуля берётся из самого модуля, а не пишется строкой: строка
+    # пережила переименование reindex_v3 -> reindex и печатала команду,
+    # которой больше нет. Заметить это можно было только в тот момент,
+    # когда откат понадобился, — то есть в худший из возможных.
     print(
-        "Откат: python -m ops.reindex_v3 --rollback "
+        f"Откат: python -m ops.{Path(__file__).stem} --rollback "
         f"--alias {alias} --previous {','.join(previous) or '<индекс>'}"
     )
 

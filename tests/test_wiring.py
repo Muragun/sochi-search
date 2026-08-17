@@ -206,6 +206,40 @@ class ModuleWiringTests(unittest.TestCase):
         )
 
 
+class PrintedCommandsExistTests(unittest.TestCase):
+    """
+    Команда, которую инструмент печатает пользователю, должна работать.
+
+    `ops/reindex.py` печатал подсказку отката с именем `ops.reindex_v3` —
+    модулем, которого больше нет: строку не поправили при переименовании.
+    Заметить это можно было только в тот момент, когда откат понадобился,
+    то есть в самый неподходящий.
+    """
+
+    MODULE_RE = re.compile(r"python -m ([a-z_]+)\.([a-z_0-9]+)")
+
+    def test_every_printed_module_exists(self) -> None:
+        problems: list[str] = []
+
+        for package in ("ops", "crawler_v2", "app_v2"):
+            for path in sorted((SOURCE / package).glob("*.py")):
+                source = path.read_text(encoding="utf-8")
+
+                for match in self.MODULE_RE.finditer(source):
+                    module = SOURCE / match.group(1) / (
+                        match.group(2) + ".py"
+                    )
+
+                    if not module.is_file():
+                        problems.append(
+                            f"{path.name}: печатает "
+                            f"«python -m {match.group(1)}."
+                            f"{match.group(2)}», такого модуля нет"
+                        )
+
+        self.assertEqual(problems, [], msg="; ".join(problems))
+
+
 class TestSuiteRunsOnPython38Tests(unittest.TestCase):
     """
     Набор тестов обязан запускаться там, где работает система.
