@@ -237,37 +237,29 @@ def main() -> int:
             f"{exact_a} == {exact_b}",
         )
 
-        number_tokens = field_tokens(
-            checker, index, "document_number.text", "512-р"
+        # `word_delimiter_graph` разбивает «512-р» на «512», «р» и слитный
+        # «512р», чтобы номер находился в любом из написаний. Обратный
+        # индекс графов не хранит, поэтому на индексной стороне после него
+        # идёт `flatten_graph`: он выпрямляет позиции, чтобы поток можно
+        # было записать без потерь.
+        #
+        # Проверяется результат, а не внутреннее устройство потока. Здесь
+        # была проверка `positionLength` с ожиданием единиц — это неверное
+        # понимание `flatten_graph`: он чинит позиционные приращения, а
+        # `positionLength` оставляет как есть, потому что Lucene его всё
+        # равно не хранит. На исправной схеме проверка падала.
+        index_variants = set(
+            field_tokens(
+                checker,
+                index,
+                "document_number.text",
+                "512-р",
+            )
         )
         checker.check(
-            "номер акта даёт слитный вариант 512р",
-            "512р" in number_tokens,
-            f"токены: {number_tokens}",
-        )
-
-        # На индексной стороне граф обязан быть развёрнут: обратный индекс
-        # графов не хранит, и без flatten_graph часть вариантов теряется.
-        # Проверяем по positionLength: у развёрнутого графа он всегда 1.
-        explained = checker.request(
-            "POST",
-            f"{index}/_analyze",
-            body={
-                "analyzer": "document_number_index",
-                "text": "512-р",
-                "explain": True,
-            },
-        )
-        detail = explained.get("detail", {})
-        last_filter = (detail.get("tokenfilters") or [{}])[-1]
-        graph_widths = [
-            int(token.get("positionLength", 1) or 1)
-            for token in last_filter.get("tokens", [])
-        ]
-        checker.check(
-            "индексный анализатор номера не оставляет граф",
-            all(width == 1 for width in graph_widths),
-            f"positionLength: {graph_widths}",
+            "номер акта даёт все три варианта: 512, р, 512р",
+            {"512", "р", "512р"} <= index_variants,
+            f"токены: {sorted(index_variants)}",
         )
 
         canonical = checker.request(
