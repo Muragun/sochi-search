@@ -153,6 +153,27 @@ class Client:
     def count(self, index: str) -> int:
         return int(self.request("GET", f"{index}/_count")["count"])
 
+    def segment_documents(self, index: str) -> int:
+        """
+        Документы в сегментах, а не в поиске.
+
+        `_count` идёт через поиск и на время заливки показывает ноль:
+        `create_index` отключает обновление индекса, поэтому свежие
+        документы поиску ещё не видны. Статистика сегментов отстаёт на
+        время до сброса буфера, но растёт по-настоящему.
+        """
+
+        result = self.request("GET", f"{index}/_stats/docs")
+        indices = result.get("indices") or {}
+
+        for entry in indices.values():
+            primaries = (entry or {}).get("primaries") or {}
+            documents = primaries.get("docs") or {}
+
+            return int(documents.get("count", 0) or 0)
+
+        return 0
+
     def alias_targets(self, alias: str) -> list[str]:
         try:
             result = self.request("GET", f"_alias/{alias}")
@@ -288,14 +309,21 @@ def wait_for_task(
         done, total = task_progress(status)
         percent = (done / total * 100) if total else 0.0
 
-        # Число документов в целевом индексе — независимая мера того, что
-        # перенос идёт. Счётчики задачи можно прочитать неверно, а это
-        # цифра из самого индекса.
+        # Независимая мера того, что перенос идёт: счётчики задачи можно
+        # прочитать неверно, как и вышло со срезами.
+        #
+        # Берётся из статистики сегментов, а не через `_count`: на время
+        # заливки `create_index` ставит `refresh_interval: -1`, поэтому
+        # поиск новых документов не видит и `_count` возвращал бы ноль
+        # при любом реальном прогрессе. Статистика сегментов обновляется
+        # по мере сброса буфера и отстаёт, но не обманывает.
         indexed = ""
 
         if destination:
             try:
-                indexed = f", в индексе {client.count(destination)}"
+                indexed = (
+                    f", в сегментах {client.segment_documents(destination)}"
+                )
             except RuntimeError:
                 indexed = ""
 
