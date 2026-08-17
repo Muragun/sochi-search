@@ -84,7 +84,7 @@ def probe_elasticsearch(
 ) -> ProbeResult:
     request = Request(
         health_url(base_url),
-        headers={"User-Agent": "sochi-search-readiness/2.5.0"},
+        headers={"User-Agent": "sochi-search-readiness/2.6.0"},
         method="GET",
     )
 

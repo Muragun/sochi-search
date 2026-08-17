@@ -11,5 +11,4 @@ tests/__pycache__
 *.tar.gz
 .env
 .env.*
-!.env.example
 !.env.production.example

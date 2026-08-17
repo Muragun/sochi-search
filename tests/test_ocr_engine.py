@@ -102,6 +102,71 @@ class ConfidenceParsingTests(unittest.TestCase):
         self.assertEqual(words, 0)
 
 
+class TesseractCommandTests(unittest.TestCase):
+    """
+    Вызов Tesseract не должен зависеть от содержимого configs/.
+
+    Виды выдачи задавались именами файлов конфигурации — `txt` и `tsv`.
+    Tesseract ищет их в `$TESSDATA_PREFIX/configs/`, а в `ocr/tessdata`
+    лежат только языковые модели, без этого каталога. На рабочем сервере
+    выходило «read_params_file: Can't open tsv», TSV не создавался,
+    уверенность получалась нулевой — и лестница повторов запускалась на
+    каждой странице: пять попыток вместо одной, 26 секунд вместо пяти.
+    Повёрнутая страница при этом не восстанавливалась, потому что при
+    равных нулях побеждала первая попытка.
+
+    Замеры делались с системной tessdata, где configs/ есть, поэтому
+    стенд расхождения не показывал.
+    """
+
+    def setUp(self) -> None:
+        self.source = (
+            Path(__file__).resolve().parents[1]
+            / "crawler_v2"
+            / "pdf_ocr_engine.py"
+        ).read_text(encoding="utf-8")
+
+    def test_output_kinds_are_set_by_variables(self) -> None:
+        self.assertIn('"tessedit_create_tsv=1"', self.source)
+        self.assertIn('"tessedit_create_txt=1"', self.source)
+
+    def test_no_bare_config_file_names_in_command(self) -> None:
+        command = self.source[
+            self.source.index("command = ["):
+            self.source.index("process = subprocess.Popen")
+        ]
+
+        for name in ('"txt",', '"tsv",'):
+            self.assertNotIn(
+                name,
+                command,
+                msg=(
+                    f"{name} передаётся как имя файла конфигурации. "
+                    "Tesseract ищет его в configs/, которого в "
+                    "ocr/tessdata нет"
+                ),
+            )
+
+    def test_repo_tessdata_has_no_configs_directory(self) -> None:
+        """
+        Фиксируем причину, а не только следствие.
+
+        Если каталог однажды появится, тест напомнит, что вызов больше не
+        обязан обходиться без него — но и менять его тогда незачем.
+        """
+
+        tessdata = (
+            Path(__file__).resolve().parents[1] / "ocr" / "tessdata"
+        )
+
+        self.assertTrue(tessdata.is_dir())
+        self.assertFalse(
+            (tessdata / "configs").exists(),
+            "появился configs/ — проверьте, что вызов Tesseract всё ещё "
+            "задаёт виды выдачи переменными",
+        )
+
+
 class FakeRect:
     def __init__(self, width: float, height: float) -> None:
         self.width = width
@@ -314,6 +379,56 @@ class LadderTests(unittest.TestCase):
         # Мягкая бинаризация совпадает с основной и пропускается,
         # остаётся ровно один поворот.
         self.assertEqual(len(self.calls), 2)
+
+    def test_unmeasured_confidence_does_not_trigger_ladder(self) -> None:
+        """
+        Ноль от неудачного разбора TSV — не признак плохой страницы.
+
+        Ноль меньше любого порога, поэтому лестница шла бы на каждой
+        странице, а при равных нулях побеждала бы первая попытка: время
+        впятеро, польза нулевая. Отличаем «не измерили» от «измерили и
+        плохо» по числу слов.
+        """
+
+        result = self.run_ocr(
+            [
+                TesseractOutput(
+                    text="АДМИНИСТРАЦИЯ ГОРОДА СОЧИ ПОСТАНОВЛЕНИЕ",
+                    confidence=0.0,
+                    low_confidence_ratio=1.0,
+                    words=0,
+                )
+            ],
+            confidence_floor=65.0,
+            retry_rotations=(90, 270, 180),
+        )
+
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("ПОСТАНОВЛЕНИЕ", result.text)
+
+    def test_empty_result_still_triggers_ladder(self) -> None:
+        """А вот пустой текст — настоящий повод попробовать иначе."""
+
+        self.run_ocr(
+            [
+                TesseractOutput(
+                    text="",
+                    confidence=0.0,
+                    low_confidence_ratio=1.0,
+                    words=0,
+                ),
+                TesseractOutput(
+                    text="ПОСТАНОВЛЕНИЕ № 512-р",
+                    confidence=88.0,
+                    low_confidence_ratio=0.02,
+                    words=3,
+                ),
+            ],
+            confidence_floor=65.0,
+            retry_rotations=(90, 270, 180),
+        )
+
+        self.assertGreater(len(self.calls), 1)
 
     def test_timeout_on_first_attempt_stops_ladder(self) -> None:
         """

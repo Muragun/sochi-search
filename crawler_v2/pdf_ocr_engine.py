@@ -322,8 +322,17 @@ def run_tesseract(
             # ради TSV стоил бы столько же, сколько сам OCR; здесь
             # распознавание уже сделано, и tsv — только другая запись
             # того же результата.
-            "txt",
-            "tsv",
+            #
+            # Задаётся переменными, а не именами файлов конфигурации.
+            # Имена `txt` и `tsv` Tesseract ищет в `$TESSDATA_PREFIX/
+            # configs/`, а в `ocr/tessdata` этого каталога нет — там
+            # только языковые модели. На рабочем сервере получалось
+            # «read_params_file: Can't open tsv», TSV не создавался,
+            # уверенность выходила нулевой, и лестница повторов
+            # запускалась на каждой странице: пять попыток вместо одной,
+            # 26 секунд вместо 5. Переменные работают без configs/.
+            "-c", "tessedit_create_txt=1",
+            "-c", "tessedit_create_tsv=1",
         ]
 
         process = subprocess.Popen(
@@ -587,8 +596,23 @@ def ocr_page(
 
     satisfied = try_attempt(prepared, label="прямо", rotation=0)
 
+    # Уверенность не измерилась, а текст есть — значит, разбор TSV не
+    # удался, а не страница плохая. Судить по такому признаку нельзя:
+    # ноль меньше любого порога, поэтому лестница пошла бы на каждой
+    # странице, а при равных нулях побеждала бы первая попытка — то есть
+    # повторы стоили бы времени и ничего не решали. Ровно это и
+    # происходило на рабочем сервере, где Tesseract не нашёл configs/.
+    confidence_measured = (
+        best_output is not None
+        and (
+            best_output.words > 0
+            or not best_output.text.strip()
+        )
+    )
+
     ladder_enabled = (
         confidence_floor > 0.0
+        and confidence_measured
         and not satisfied
         and not timed_out
     )
