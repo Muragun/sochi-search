@@ -353,12 +353,50 @@ def finalize(client: Client, *, index: str) -> None:
     print(f"FINALIZED index={index}")
 
 
+def refresh_interval_of(client: Client, index: str) -> str:
+    try:
+        settings = client.request("GET", f"{index}/_settings")
+    except RuntimeError:
+        return ""
+
+    for entry in (settings or {}).values():
+        index_settings = (
+            (entry or {}).get("settings", {}).get("index", {})
+        )
+
+        return str(index_settings.get("refresh_interval", ""))
+
+    return ""
+
+
 def verify(
     client: Client,
     *,
     source: str,
     destination: str,
 ) -> bool:
+    # Проверка идёт поиском, а поиск не видит документы до обновления
+    # индекса. На время заливки обновление отключено, и включает его
+    # обратно `finalize` — который не выполнится, если перенос прервали
+    # на середине или следили за ним из другого окна.
+    #
+    # Без этого `--verify` показывал `destination=0` на полном индексе:
+    # выглядит как полностью провалившийся перенос, хотя данные на месте.
+    interval = refresh_interval_of(client, destination)
+
+    if interval == "-1":
+        print(
+            "  ВНИМАНИЕ: обновление индекса отключено — так его "
+            "оставляет прерванный перенос. Проверка идёт поиском, "
+            "поэтому сначала обновляем; после проверки запустите "
+            "--finalize, иначе индекс останется без автообновления."
+        )
+
+    try:
+        client.request("POST", f"{destination}/_refresh")
+    except RuntimeError as error:
+        print(f"  не удалось обновить индекс: {error}")
+
     source_count = client.count(source)
     destination_count = client.count(destination)
 
@@ -499,6 +537,15 @@ def main() -> int:
     )
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--reindex", action="store_true")
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help=(
+            "Вернуть обновление индекса и слить сегменты. Нужен, если "
+            "перенос прервали: тогда индекс остался с отключённым "
+            "обновлением, и поиск по нему ничего не находит"
+        ),
+    )
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--switch", action="store_true")
     parser.add_argument("--rollback", action="store_true")
@@ -596,6 +643,12 @@ def main() -> int:
             poll_seconds=arguments.poll_seconds,
             destination=arguments.destination,
         )
+        finalize(client, index=arguments.destination)
+
+    # Отдельный шаг: перенос могли прервать, и тогда индекс остался с
+    # отключённым обновлением и без слияния сегментов. Повторять ради
+    # этого весь `--reindex` незачем.
+    if arguments.finalize and not arguments.reindex:
         finalize(client, index=arguments.destination)
 
     if arguments.verify:
