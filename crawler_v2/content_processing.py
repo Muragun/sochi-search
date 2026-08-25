@@ -34,7 +34,7 @@ from .pdf_ocr import (
     extract_pdf_page_text,
     legal_header_needs_ocr,
 )
-from .text_repair import repair_ocr_text
+from .text_repair import repair_ocr_text, technical_filename
 
 
 WHITESPACE_RE = re.compile(r"\s+")
@@ -1890,6 +1890,84 @@ def extract_pdf(
         )
 
 
+def document_title_from_url(final_url: str) -> str:
+    """Имя файла, если оно что-то значит; иначе пусто."""
+
+    name = filename_from_url(final_url)
+
+    return "" if technical_filename(name) else name
+
+
+def describe_document(
+    text: str,
+    final_url: str,
+    *,
+    fallback_title: str = "",
+) -> tuple[str, Any]:
+    """
+    Заголовок и реквизиты по тексту самого документа.
+
+    Раньше это делалось только для PDF: `extract_legal_title_metadata`
+    вызывался ровно в одном месте — внутри разбора PDF. Офисные файлы
+    реквизитов из своего текста не получали никогда, только по
+    наследству от родительской HTML-карточки. У файла, найденного прямо
+    в `/upload/` без родителя, реквизитов не появлялось вовсе: в выдаче
+    карточка с хешем вместо названия, без даты и без номера — при том
+    что первая строка внутри документа начинается с «ПОСТАНОВЛЕНИЕ
+    администрации города Сочи от … № …».
+
+    Разбор один и тот же для всех форматов: текст есть текст.
+    """
+
+    metadata = extract_legal_title_metadata(text)
+
+    title = fallback_title or document_title_from_url(final_url)
+
+    if not title:
+        title = legal_title_from_text(text)
+
+    return title, metadata
+
+
+def legal_title_from_text(text: str) -> str:
+    """
+    Первая содержательная строка документа как название.
+
+    Берётся начало от вида акта, если он найден: «Постановление
+    администрации города Сочи от 14 марта 2024 года № 512-р». Если вида
+    акта нет — просто первая непустая строка разумной длины.
+    """
+
+    normalized = compact_text(text)
+
+    if not normalized:
+        return ""
+
+    match = LEGAL_KIND_IN_TEXT_RE.search(normalized[:1200])
+    start = match.start() if match else 0
+    candidate = normalized[start:start + 300]
+
+    for separator in ("»", ". ", "; "):
+        position = candidate.find(separator, 40)
+
+        if position > 0:
+            candidate = candidate[:position + len(separator)]
+            break
+
+    candidate = compact_text(candidate).strip(" -–—:;,")
+
+    return candidate[:240]
+
+
+LEGAL_KIND_IN_TEXT_RE = re.compile(
+    (
+        r"\b(?:постановление|распоряжение|решение|приказ|"
+        r"положение|указ|извещение|протокол|регламент)\b"
+    ),
+    flags=re.IGNORECASE,
+)
+
+
 def extract_docx(
     body: bytes,
     *,
@@ -1931,8 +2009,14 @@ def extract_docx(
             "В DOCX не удалось извлечь достаточно текста"
         )
 
+    # Реквизиты берутся из текста самого документа, как у PDF.
+    # Раньше офисные файлы получали их только по наследству от
+    # родительской HTML-карточки, а найденные прямо в /upload/
+    # оставались вовсе без даты, номера и вида акта.
+    title, legal_metadata = describe_document(text, final_url)
+
     return ExtractedContent(
-        title=filename_from_url(final_url),
+        title=title,
         section="Документ DOCX",
         doc_type="file",
         content_type=(
@@ -1941,6 +2025,9 @@ def extract_docx(
             "wordprocessingml.document"
         ),
         pages=((1, text),),
+        document_number=legal_metadata.document_number,
+        document_date=legal_metadata.document_date,
+        document_kind=legal_metadata.document_kind,
     )
 
 
@@ -2001,8 +2088,14 @@ def extract_xlsx(
             "В XLSX не удалось извлечь достаточно текста"
         )
 
+    # Реквизиты берутся из текста самого документа, как у PDF.
+    # Раньше офисные файлы получали их только по наследству от
+    # родительской HTML-карточки, а найденные прямо в /upload/
+    # оставались вовсе без даты, номера и вида акта.
+    title, legal_metadata = describe_document(pages[0][1] if pages else "", final_url)
+
     return ExtractedContent(
-        title=filename_from_url(final_url),
+        title=title,
         section="Таблица XLSX",
         doc_type="file",
         content_type=(
@@ -2011,6 +2104,9 @@ def extract_xlsx(
             "spreadsheetml.sheet"
         ),
         pages=tuple(pages),
+        document_number=legal_metadata.document_number,
+        document_date=legal_metadata.document_date,
+        document_kind=legal_metadata.document_kind,
     )
 
 
@@ -2042,12 +2138,21 @@ def extract_text_document(
             "В текстовом файле недостаточно текста"
         )
 
+    # Реквизиты берутся из текста самого документа, как у PDF.
+    # Раньше офисные файлы получали их только по наследству от
+    # родительской HTML-карточки, а найденные прямо в /upload/
+    # оставались вовсе без даты, номера и вида акта.
+    title, legal_metadata = describe_document(text, final_url)
+
     return ExtractedContent(
-        title=filename_from_url(final_url),
+        title=title,
         section="Текстовый файл",
         doc_type="file",
         content_type=content_type or "text/plain",
         pages=((1, text),),
+        document_number=legal_metadata.document_number,
+        document_date=legal_metadata.document_date,
+        document_kind=legal_metadata.document_kind,
     )
 
 
@@ -2164,13 +2269,22 @@ def extract_rtf(
             "RTF не содержит полезного текста"
         )
 
+    # Реквизиты берутся из текста самого документа, как у PDF.
+    # Раньше офисные файлы получали их только по наследству от
+    # родительской HTML-карточки, а найденные прямо в /upload/
+    # оставались вовсе без даты, номера и вида акта.
+    title, legal_metadata = describe_document(text, final_url)
+
     return ExtractedContent(
-        title=filename_from_url(final_url),
+        title=title,
         section="Документ RTF",
         doc_type="file",
         content_type=content_type or "application/rtf",
         pages=((1, text),),
         extraction_version="rtf-v1",
+        document_number=legal_metadata.document_number,
+        document_date=legal_metadata.document_date,
+        document_kind=legal_metadata.document_kind,
     )
 
 
@@ -2241,8 +2355,14 @@ def extract_opendocument(
         urlparse(final_url).path.lower()
     ).suffix
 
+    # Реквизиты берутся из текста самого документа, как у PDF.
+    # Раньше офисные файлы получали их только по наследству от
+    # родительской HTML-карточки, а найденные прямо в /upload/
+    # оставались вовсе без даты, номера и вида акта.
+    title, legal_metadata = describe_document(text, final_url)
+
     return ExtractedContent(
-        title=filename_from_url(final_url),
+        title=title,
         section=(
             "Таблица OpenDocument"
             if suffix == ".ods"
@@ -2255,6 +2375,9 @@ def extract_opendocument(
         ),
         pages=((1, text),),
         extraction_version="odf-v1",
+        document_number=legal_metadata.document_number,
+        document_date=legal_metadata.document_date,
+        document_kind=legal_metadata.document_kind,
     )
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-import re
 import socket
 import sys
 import time
@@ -32,7 +31,7 @@ from .legal_metadata import (
     extract_legal_title_metadata,
 )
 from .pdf_ocr import PDF_EXTRACTION_VERSION
-from .text_repair import normalize_document_number
+from .text_repair import normalize_document_number, technical_filename
 from .incremental_db import (
     IncrementalStateDatabase,
     iso_after_hours,
@@ -137,11 +136,6 @@ LEGAL_TITLE_MARKERS = (
     "Указ",
 )
 
-TECHNICAL_PDF_TITLE_RE = re.compile(
-    r"^(?:[0-9a-f]{24,64}|[0-9a-f-]{32,36})(?:\.pdf)?$",
-    flags=re.IGNORECASE,
-)
-
 AUTHORITATIVE_METADATA_FIELDS = (
     "document_number",
     "document_date",
@@ -166,9 +160,7 @@ def useful_pdf_title(value: Any) -> bool:
     }:
         return False
 
-    if TECHNICAL_PDF_TITLE_RE.fullmatch(
-        normalized
-    ):
+    if technical_filename(normalized):
         return False
 
     has_legal_marker = any(
