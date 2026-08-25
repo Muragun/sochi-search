@@ -117,8 +117,7 @@ def sauvola_binarize(
     if threshold.shape != array.shape:
         threshold = np.asarray(
             Image.fromarray(
-                np.clip(threshold, 0, 255).astype(np.float32),
-                mode="F",
+                np.clip(threshold, 0, 255).astype(np.float32)
             ).resize((width, height), Image.BILINEAR),
             dtype=np.float32,
         )
@@ -229,7 +228,20 @@ def prepare_page(
     binarize: bool = True,
     despeckle: bool = True,
     blank_ink_ratio: float = 0.0004,
+    sauvola_k: float = 0.15,
 ) -> PreparedPage:
+    """
+    Готовит страницу к распознаванию.
+
+    `sauvola_k` — насколько порог отходит от локального среднего. Чем
+    больше, тем строже отбор чернил. Замер на выцветшей копии показал, что
+    одного значения на все страницы не существует: при k = 0,15 хорошо
+    читается обычная архивная копия (98,4 % против 93,9 %), при k = 0,10 —
+    сильно засвеченная (54,6 % против 49,7 %). Поэтому основное значение
+    берётся строгое, а мягкое остаётся второй ступенью для страниц, на
+    которых Tesseract не уверен в себе.
+    """
+
     grayscale = image.convert("L")
     array = np.asarray(grayscale)
 
@@ -258,11 +270,17 @@ def prepare_page(
     # Сначала бинаризация: она снимает градиент подсветки и тёмную кромку
     # листа. Если оценивать перекос до неё, эти артефакты дают более сильную
     # проекцию, чем сами строки текста, и угол определяется неверно.
-    binary = sauvola_binarize(array)
-    result = Image.fromarray(binary, mode="L")
+    binary = sauvola_binarize(array, k=sauvola_k)
+    result = Image.fromarray(binary)
 
     if despeckle:
         # Медиана 3x3 убирает одиночные точки тонера, не трогая штрихи.
+        #
+        # Замер на выцветшей копии: без неё двенадцать из восемнадцати
+        # сочетаний параметров бинаризации дают ровно ноль символов —
+        # анализ раскладки принимает точки тонера за элементы вёрстки и
+        # не находит ни одной строки. Это не косметика, а условие того,
+        # что страница вообще будет прочитана.
         result = result.filter(ImageFilter.MedianFilter(3))
         binary = np.asarray(result)
 
@@ -278,7 +296,7 @@ def prepare_page(
         binary = (
             np.asarray(result) > 128
         ).astype(np.uint8) * 255
-        result = Image.fromarray(binary, mode="L")
+        result = Image.fromarray(binary)
 
     ink_ratio = float((binary == 0).mean())
 

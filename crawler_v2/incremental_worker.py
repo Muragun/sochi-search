@@ -8,7 +8,6 @@ import socket
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -33,6 +32,7 @@ from .legal_metadata import (
     extract_legal_title_metadata,
 )
 from .pdf_ocr import PDF_EXTRACTION_VERSION
+from .text_repair import normalize_document_number
 from .incremental_db import (
     IncrementalStateDatabase,
     iso_after_hours,
@@ -685,6 +685,31 @@ def build_documents(
         content.unreadable_pages
     )
 
+    # Канонический вид номера акта — той же функцией, что нормализует
+    # запрос. Без него точное совпадение зависело от того, как номер
+    # записан в источнике: «№ 512-р» попадал в индекс как «№  512-р», а
+    # искался как «512-р», и точное совпадение с весом 40 не срабатывало.
+    normalized_document_number = (
+        normalize_document_number(document_number) or None
+        if document_number
+        else None
+    )
+
+    # Средняя уверенность Tesseract по распознанным страницам документа.
+    #
+    # None, а не ноль, когда OCR не запускался: ноль в поле `float`
+    # означал бы «распознано отвратительно» и попал бы в отбор страниц
+    # на переделку, хотя распознавать было нечего.
+    ocr_confidence = (
+        round(
+            sum(content.ocr_confidences)
+            / len(content.ocr_confidences),
+            2,
+        )
+        if content.ocr_confidences
+        else None
+    )
+
     documents: list[dict[str, Any]] = []
 
     for chunk in chunks:
@@ -729,6 +754,9 @@ def build_documents(
                 ),
 
                 "document_number": document_number,
+                "document_number_normalized": (
+                    normalized_document_number
+                ),
                 "document_date": document_date,
                 "document_kind": document_kind,
 
@@ -778,6 +806,7 @@ def build_documents(
                 "ocr_page_count": len(
                     content.ocr_pages
                 ),
+                "ocr_confidence": ocr_confidence,
                 "ocr_attempted_page_count": len(
                     content.ocr_attempted_pages
                 ),

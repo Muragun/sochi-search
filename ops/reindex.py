@@ -1,10 +1,15 @@
 """
-Перенос индекса на mapping `sochi_docs_v3` без повторного обхода сайта.
+Перенос индекса на новую схему без повторного обхода сайта.
 
 Текст, уже извлечённый из HTML и PDF, лежит в Elasticsearch. Менять нужно
 разбор этого текста — анализаторы, поля, подсветку, — а не сам текст, поэтому
 `_reindex` внутри кластера дешевле повторного скачивания десятков тысяч
 страниц. Качество OCR у старых PDF доводится отдельно, фоновым backfill.
+
+Схема задаётся ключом `--mapping`, поэтому модуль не привязан к её номеру.
+Раньше он назывался `reindex_v3` и при этом создавал уже v4: имя с номером
+устаревает молча, ровно как устарел тест, сверявшийся со строкой
+«pdf-ocr-v5».
 
 Порядок:
 
@@ -23,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -95,11 +99,19 @@ if (url == null) {
         }
     }
 }
+
 """
 
+# Контрольные запросы не должны зависеть от того, какие именно документы
+# лежат в корпусе. Здесь был `term` по номеру «512-р» — синтетическому
+# примеру из тестов: ноль в ответе означал не поломку, а отсутствие акта
+# с таким номером, и отличить одно от другого было нельзя.
 CONTROL_QUERIES = [
     ("поиск по слову с ё", {"query": {"match": {"text": "ёлка"}}}),
-    ("поиск по номеру акта", {"query": {"term": {"document_number": "512-р"}}}),
+    (
+        "документы с номером акта",
+        {"query": {"exists": {"field": "document_number"}}},
+    ),
     ("фильтр рубрики", {"query": {"term": {"content_category": "legal"}}}),
     ("вложения", {"query": {"term": {"is_attachment": True}}}),
 ]
@@ -144,6 +156,27 @@ class Client:
 
     def count(self, index: str) -> int:
         return int(self.request("GET", f"{index}/_count")["count"])
+
+    def segment_documents(self, index: str) -> int:
+        """
+        Документы в сегментах, а не в поиске.
+
+        `_count` идёт через поиск и на время заливки показывает ноль:
+        `create_index` отключает обновление индекса, поэтому свежие
+        документы поиску ещё не видны. Статистика сегментов отстаёт на
+        время до сброса буфера, но растёт по-настоящему.
+        """
+
+        result = self.request("GET", f"{index}/_stats/docs")
+        indices = result.get("indices") or {}
+
+        for entry in indices.values():
+            primaries = (entry or {}).get("primaries") or {}
+            documents = primaries.get("docs") or {}
+
+            return int(documents.get("count", 0) or 0)
+
+        return 0
 
     def alias_targets(self, alias: str) -> list[str]:
         try:
@@ -204,7 +237,51 @@ def start_reindex(
     return task
 
 
-def wait_for_task(client: Client, task: str, *, poll_seconds: int) -> None:
+def task_progress(status: dict[str, Any]) -> tuple[int, int]:
+    """
+    Сколько документов перенесено и сколько всего.
+
+    У нарезанного `_reindex` (`slices` больше единицы) счётчики лежат в
+    подзадачах, а верхнеуровневые остаются нулями. Монитор читал только
+    верхние и показывал «0/0» до самого конца — на рабочем кластере
+    8.19.17 это выглядело как зависший перенос, хотя он шёл нормально.
+
+    Записи подзадач бывают пустыми: срез, который ещё не начался,
+    приходит как `null`.
+    """
+
+    slices = status.get("slices") or []
+
+    if slices:
+        total = 0
+        done = 0
+
+        for entry in slices:
+            if not isinstance(entry, dict):
+                continue
+
+            total += int(entry.get("total", 0) or 0)
+            done += (
+                int(entry.get("created", 0) or 0)
+                + int(entry.get("updated", 0) or 0)
+            )
+
+        return done, total
+
+    return (
+        int(status.get("created", 0) or 0)
+        + int(status.get("updated", 0) or 0),
+        int(status.get("total", 0) or 0),
+    )
+
+
+def wait_for_task(
+    client: Client,
+    task: str,
+    *,
+    poll_seconds: int,
+    destination: str = "",
+) -> None:
     while True:
         result = client.request("GET", f"_tasks/{task}")
 
@@ -233,15 +310,29 @@ def wait_for_task(client: Client, task: str, *, poll_seconds: int) -> None:
             return
 
         status = result.get("task", {}).get("status", {})
-        total = int(status.get("total", 0) or 0)
-        done = (
-            int(status.get("created", 0) or 0)
-            + int(status.get("updated", 0) or 0)
-        )
+        done, total = task_progress(status)
         percent = (done / total * 100) if total else 0.0
 
+        # Независимая мера того, что перенос идёт: счётчики задачи можно
+        # прочитать неверно, как и вышло со срезами.
+        #
+        # Берётся из статистики сегментов, а не через `_count`: на время
+        # заливки `create_index` ставит `refresh_interval: -1`, поэтому
+        # поиск новых документов не видит и `_count` возвращал бы ноль
+        # при любом реальном прогрессе. Статистика сегментов обновляется
+        # по мере сброса буфера и отстаёт, но не обманывает.
+        indexed = ""
+
+        if destination:
+            try:
+                indexed = (
+                    f", в сегментах {client.segment_documents(destination)}"
+                )
+            except RuntimeError:
+                indexed = ""
+
         print(
-            f"  прогресс: {done}/{total} ({percent:.1f}%)",
+            f"  прогресс: {done}/{total} ({percent:.1f}%){indexed}",
             flush=True,
         )
         time.sleep(poll_seconds)
@@ -266,12 +357,50 @@ def finalize(client: Client, *, index: str) -> None:
     print(f"FINALIZED index={index}")
 
 
+def refresh_interval_of(client: Client, index: str) -> str:
+    try:
+        settings = client.request("GET", f"{index}/_settings")
+    except RuntimeError:
+        return ""
+
+    for entry in (settings or {}).values():
+        index_settings = (
+            (entry or {}).get("settings", {}).get("index", {})
+        )
+
+        return str(index_settings.get("refresh_interval", ""))
+
+    return ""
+
+
 def verify(
     client: Client,
     *,
     source: str,
     destination: str,
 ) -> bool:
+    # Проверка идёт поиском, а поиск не видит документы до обновления
+    # индекса. На время заливки обновление отключено, и включает его
+    # обратно `finalize` — который не выполнится, если перенос прервали
+    # на середине или следили за ним из другого окна.
+    #
+    # Без этого `--verify` показывал `destination=0` на полном индексе:
+    # выглядит как полностью провалившийся перенос, хотя данные на месте.
+    interval = refresh_interval_of(client, destination)
+
+    if interval == "-1":
+        print(
+            "  ВНИМАНИЕ: обновление индекса отключено — так его "
+            "оставляет прерванный перенос. Проверка идёт поиском, "
+            "поэтому сначала обновляем; после проверки запустите "
+            "--finalize, иначе индекс останется без автообновления."
+        )
+
+    try:
+        client.request("POST", f"{destination}/_refresh")
+    except RuntimeError as error:
+        print(f"  не удалось обновить индекс: {error}")
+
     source_count = client.count(source)
     destination_count = client.count(destination)
 
@@ -312,6 +441,30 @@ def verify(
 
     print(f"  без рубрики: {empty_category}")
 
+    # Каноническое поле номера заполняет обходчик. У перенесённых
+    # документов его нет и не должно быть: точное совпадение по ним
+    # обеспечивает нормализатор схемы поверх `document_number`. Печатаем
+    # цифру, чтобы было видно, как поле наполняется по мере обхода.
+    normalized = client.request(
+        "POST",
+        f"{destination}/_search",
+        body={
+            "size": 0,
+            "track_total_hits": True,
+            "query": {"exists": {"field": "document_number_normalized"}},
+        },
+    )["hits"]["total"]["value"]
+
+    print(
+        f"  номера в каноническом виде: {normalized}"
+        + (
+            " (заполняется обходчиком, сразу после переноса ноль — "
+            "это нормально)"
+            if not normalized
+            else ""
+        )
+    )
+
     if empty_category:
         print("  [FAIL] остались документы без content_category")
         ok = False
@@ -340,8 +493,12 @@ def switch_alias(
         f"ALIAS_SWITCHED alias={alias} "
         f"from={','.join(previous) or '(нет)'} to={destination}"
     )
+    # Имя модуля берётся из самого модуля, а не пишется строкой: строка
+    # пережила переименование reindex_v3 -> reindex и печатала команду,
+    # которой больше нет. Заметить это можно было только в тот момент,
+    # когда откат понадобился, — то есть в худший из возможных.
     print(
-        "Откат: python -m ops.reindex_v3 --rollback "
+        f"Откат: python -m ops.{Path(__file__).stem} --rollback "
         f"--alias {alias} --previous {','.join(previous) or '<индекс>'}"
     )
 
@@ -391,12 +548,12 @@ def main() -> int:
     parser.add_argument("--source", default="")
     parser.add_argument(
         "--destination",
-        default=f"sochi_docs_v3_{date.today():%Y%m%d}",
+        default=f"sochi_docs_v4_{date.today():%Y%m%d}",
     )
     parser.add_argument(
         "--mapping",
         type=Path,
-        default=Path("elasticsearch/sochi_docs_v3.json"),
+        default=Path("elasticsearch/sochi_docs_v4.json"),
     )
     parser.add_argument("--slices", type=int, default=2)
     parser.add_argument("--poll-seconds", type=int, default=15)
@@ -412,6 +569,15 @@ def main() -> int:
     )
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--reindex", action="store_true")
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help=(
+            "Вернуть обновление индекса и слить сегменты. Нужен, если "
+            "перенос прервали: тогда индекс остался с отключённым "
+            "обновлением, и поиск по нему ничего не находит"
+        ),
+    )
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--switch", action="store_true")
     parser.add_argument("--rollback", action="store_true")
@@ -507,7 +673,14 @@ def main() -> int:
             client,
             task,
             poll_seconds=arguments.poll_seconds,
+            destination=arguments.destination,
         )
+        finalize(client, index=arguments.destination)
+
+    # Отдельный шаг: перенос могли прервать, и тогда индекс остался с
+    # отключённым обновлением и без слияния сегментов. Повторять ради
+    # этого весь `--reindex` незачем.
+    if arguments.finalize and not arguments.reindex:
         finalize(client, index=arguments.destination)
 
     if arguments.verify:

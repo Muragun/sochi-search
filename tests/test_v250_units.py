@@ -38,7 +38,7 @@ from crawler_v2.pdf_ocr_image import (  # noqa: E402
 MAPPING_PATH = (
     Path(__file__).resolve().parents[1]
     / "elasticsearch"
-    / "sochi_docs_v3.json"
+    / "sochi_docs_v4.json"
 )
 
 DEAD_FIELDS = {"content", "body", "headings", "description", "document_type"}

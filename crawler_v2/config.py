@@ -45,6 +45,31 @@ def env_int(
     return max(value, minimum)
 
 
+def env_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float = 0.0,
+    maximum: float | None = None,
+) -> float:
+    raw_value = os.getenv(name)
+
+    if raw_value is None:
+        return default
+
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return default
+
+    value = max(value, minimum)
+
+    if maximum is not None:
+        value = min(value, maximum)
+
+    return value
+
+
 def env_list(
     name: str,
     default: str,
@@ -137,6 +162,11 @@ class CrawlerSettings:
     pdf_ocr_pixel_budget: int
     pdf_ocr_deskew: bool
     pdf_ocr_binarize: bool
+    pdf_ocr_sauvola_k: float
+    pdf_ocr_retry_sauvola_k: float
+    pdf_ocr_confidence_floor: float
+    pdf_ocr_retry_rotations: tuple[int, ...]
+    pdf_ocr_ladder_budget_seconds: int
     pdf_ocr_priority_pages: int
     pdf_ocr_coverage_pages: int
     pdf_ocr_batch_documents: int
@@ -285,11 +315,23 @@ settings = CrawlerSettings(
         )
     ),
 
+    # Только русский.
+    #
+    # Замер на синтетических страницах с известным эталоном: добавление
+    # `eng` не даёт ни одного лишнего верного слова, но разрешает Tesseract
+    # выбирать латинские буквы там, где он не уверен. На выцветшей копии
+    # это дало 155 полностью латинских «слов» из 261 — ту самую глифовую
+    # кашу, из-за которой документ уходил в `skipped_empty`. Точность на
+    # той же странице 32,6 % против 49,7 % у `rus`, время вдвое больше.
+    # Номер акта при `rus+eng` пришёл как «512-p» с латинской «p» — для
+    # поиска это другой номер.
+    #
+    # Для двуязычных вложений значение остаётся настройкой.
     pdf_ocr_languages=os.getenv(
         "CRAWL_PDF_OCR_LANGUAGES",
-        "rus+eng",
+        "rus",
     ).strip()
-    or "rus+eng",
+    or "rus",
 
     pdf_ocr_dpi=min(
         env_int(
@@ -390,6 +432,51 @@ settings = CrawlerSettings(
     pdf_ocr_binarize=env_bool(
         "CRAWL_PDF_OCR_BINARIZE",
         True,
+    ),
+
+    # Насколько порог Сауволы отходит от локального среднего. Строгое
+    # значение лучше на обычной архивной копии (98,4 % против 93,9 %),
+    # мягкое — на сильно засвеченной (54,6 % против 49,7 %). Одного
+    # значения на обе страницы нет, поэтому мягкое стало второй ступенью.
+    pdf_ocr_sauvola_k=env_float(
+        "CRAWL_PDF_OCR_SAUVOLA_K",
+        0.15,
+        minimum=0.01,
+        maximum=0.9,
+    ),
+
+    pdf_ocr_retry_sauvola_k=env_float(
+        "CRAWL_PDF_OCR_RETRY_SAUVOLA_K",
+        0.10,
+        minimum=0.01,
+        maximum=0.9,
+    ),
+
+    # Ниже этой средней уверенности страница пробуется ещё раз.
+    #
+    # Замер: чистый скан — 95,8, обычная архивная копия — 90,2, выцветшая
+    # копия с точностью 50 % — 23,7, повёрнутая страница — 19,9. Порог 65
+    # лежит в пустоте между двумя группами. Ноль выключает повторы.
+    pdf_ocr_confidence_floor=env_float(
+        "CRAWL_PDF_OCR_CONFIDENCE_FLOOR",
+        65.0,
+        minimum=0.0,
+        maximum=100.0,
+    ),
+
+    # Повороты перебираются только для страниц, на которых Tesseract сам
+    # сообщил о низкой уверенности. Порядок — по частоте: альбомный скан
+    # встречается чаще перевёрнутого.
+    pdf_ocr_retry_rotations=env_rotations(
+        "CRAWL_PDF_OCR_RETRY_ROTATIONS",
+        "90,270,180",
+    ),
+
+    # Общий потолок времени на страницу вместе со всеми повторами.
+    pdf_ocr_ladder_budget_seconds=env_int(
+        "CRAWL_PDF_OCR_LADDER_BUDGET_SECONDS",
+        150,
+        minimum=10,
     ),
 
     pdf_ocr_priority_pages=env_int(

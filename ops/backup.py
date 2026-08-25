@@ -16,7 +16,7 @@ import tempfile
 from typing import Iterable
 
 
-RELEASE_VERSION = "2.5.0"
+RELEASE_VERSION = "2.6.0"
 
 DEFAULT_SOURCE_ENTRIES = (
     "app",

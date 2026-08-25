@@ -9,7 +9,7 @@
 Запуск:
 
     python -m ops.validate_elasticsearch \\
-        --mapping elasticsearch/sochi_docs_v3.json
+        --mapping elasticsearch/sochi_docs_v4.json
 """
 
 from __future__ import annotations
@@ -134,6 +134,33 @@ SAMPLE_DOCUMENTS = [
         "chunk_number": 0,
         "hash": "b" * 64,
     },
+    {
+        # Номер записан так, как он приходит из строки «Номер документа»:
+        # со знаком номера, пробелами вокруг тире и латинской «p» из
+        # распознавания. Индекс обязан привести это к «84-рс».
+        "url": "https://sochi.ru/upload/doc-84.pdf",
+        "title": "Распоряжение о выделении помещения",
+        "attachment_title": "Распоряжение № 84-РС от 2 июня 2023 года",
+        "text": (
+            "Администрация города Сочи распоряжается выделить помещение "
+            "для работы комиссии по вопросам благоустройства территории. "
+            "Справка о составе семьи выдаётся заявителю."
+        ),
+        "document_number": "№ 84 – PC",
+        "document_kind": "распоряжение",
+        "document_date": "2023-06-02",
+        "sort_date": "2023-06-02",
+        "content_category": "legal",
+        "doc_type": "pdf",
+        "is_attachment": True,
+        "url_path": "/upload/doc-84.pdf",
+        "page_number": 1,
+        "chunk_number": 0,
+        "hash": "c" * 64,
+        "ocr_used": True,
+        "ocr_confidence": 91.4,
+        "text_extraction": "ocr",
+    },
 ]
 
 
@@ -210,13 +237,46 @@ def main() -> int:
             f"{exact_a} == {exact_b}",
         )
 
-        number_tokens = field_tokens(
-            checker, index, "document_number.text", "512-р"
+        # `word_delimiter_graph` разбивает «512-р» на «512», «р» и слитный
+        # «512р», чтобы номер находился в любом из написаний. Обратный
+        # индекс графов не хранит, поэтому на индексной стороне после него
+        # идёт `flatten_graph`: он выпрямляет позиции, чтобы поток можно
+        # было записать без потерь.
+        #
+        # Проверяется результат, а не внутреннее устройство потока. Здесь
+        # была проверка `positionLength` с ожиданием единиц — это неверное
+        # понимание `flatten_graph`: он чинит позиционные приращения, а
+        # `positionLength` оставляет как есть, потому что Lucene его всё
+        # равно не хранит. На исправной схеме проверка падала.
+        index_variants = set(
+            field_tokens(
+                checker,
+                index,
+                "document_number.text",
+                "512-р",
+            )
         )
         checker.check(
-            "номер акта даёт слитный вариант 512р",
-            "512р" in number_tokens,
-            f"токены: {number_tokens}",
+            "номер акта даёт все три варианта: 512, р, 512р",
+            {"512", "р", "512р"} <= index_variants,
+            f"токены: {sorted(index_variants)}",
+        )
+
+        canonical = checker.request(
+            "POST",
+            f"{index}/_analyze",
+            body={
+                "field": "document_number",
+                "text": "№ 512 – Р",
+            },
+        )
+        canonical_tokens = [
+            item["token"] for item in canonical.get("tokens", [])
+        ]
+        checker.check(
+            "«№ 512 – Р» нормализуется в «512-р»",
+            canonical_tokens == ["512-р"],
+            f"токены: {canonical_tokens}",
         )
 
         stop_removed = tokens(checker, index, "russian_text", "и в на о")
@@ -287,6 +347,70 @@ def main() -> int:
             "поиск по номеру акта находит нужный документ",
             bool(hits) and "512" in hits[0]["_source"].get("url", ""),
             f"попаданий: {len(hits)}",
+        )
+
+        # Номер, записанный со знаком номера, пробелами вокруг тире и
+        # латинскими буквами, должен находиться по канонической записи.
+        # Именно это раньше не работало: нормализатор индекса и функция
+        # запроса приводили номер к разному виду.
+        response = search(
+            build_search_body("84-рс", limit=10, offset=0)
+        )
+        hits = response["hits"]["hits"]
+        checker.check(
+            "«№ 84 – PC» находится по запросу «84-рс»",
+            bool(hits) and "doc-84" in hits[0]["_source"].get("url", ""),
+            f"попаданий: {len(hits)}",
+        )
+
+        stored = search(
+            {
+                "query": {"term": {"document_number": "84-рс"}},
+                "size": 1,
+            }
+        )
+        checker.check(
+            "нормализатор схемы приводит «№ 84 – PC» к «84-рс»",
+            stored["hits"]["total"]["value"] >= 1,
+            "терм не совпал — цепочка char_filter расходится с запросом",
+        )
+
+        # Кавычки: фраза целиком обязана быть в документе.
+        response = search(
+            build_search_body(
+                "«справка о составе семьи»", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "точная фраза в кавычках находит документ",
+            response["hits"]["total"]["value"] >= 1,
+            json.dumps(response["hits"]["total"], ensure_ascii=False),
+        )
+
+        response = search(
+            build_search_body(
+                "«семьи составе о справка»", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "переставленная фраза в кавычках не находится",
+            response["hits"]["total"]["value"] == 0,
+            "кавычки не сужают выдачу",
+        )
+
+        # Минус-слово: документ с этим словом обязан исчезнуть.
+        response = search(
+            build_search_body(
+                "благоустройства -комиссии", limit=10, offset=0
+            )
+        )
+        checker.check(
+            "минус-слово убирает документ из выдачи",
+            all(
+                "комиссии" not in hit["_source"].get("text", "")
+                for hit in response["hits"]["hits"]
+            ),
+            "документ со словом «комиссии» остался в выдаче",
         )
 
         response = search(

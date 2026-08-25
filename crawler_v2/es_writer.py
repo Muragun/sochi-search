@@ -139,7 +139,7 @@ class ElasticsearchWriter:
         # mapping означал, что каждый bulk ждал обновления, которое само по
         # себе никогда не наступало: запрос висел до аварийного предела
         # `index.max_refresh_listeners` либо до таймаута сокета. Индекс
-        # `sochi_docs_v3` обновляется раз в 5 секунд, поэтому достаточно
+        # `sochi_docs_v4` обновляется раз в 5 секунд, поэтому достаточно
         # `refresh=false`.
         response = self.session.post(
             (

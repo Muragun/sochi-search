@@ -44,7 +44,7 @@ app = FastAPI(
         "Поиск по страницам и документам сайта sochi.ru, "
         "проиндексированным в Elasticsearch."
     ),
-    version="2.5.0",
+    version="2.6.0",
 )
 
 

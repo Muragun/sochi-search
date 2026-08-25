@@ -471,6 +471,20 @@ h1 {
     margin: 10px 2px 0;
     color: var(--text-muted);
     font-size: 13px;
+    line-height: 1.55;
+}
+
+/* Примеры синтаксиса в подсказке: моноширинный набор отделяет образец
+   запроса от объясняющего текста, иначе кавычки читаются как оформление
+   предложения, а не как то, что нужно набрать. */
+.search-hint__example {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    white-space: nowrap;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--surface-muted, rgba(127, 127, 127, 0.12));
+    color: var(--text-primary, inherit);
 }
 
 .recent-searches {

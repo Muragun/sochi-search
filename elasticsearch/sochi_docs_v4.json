@@ -1,0 +1,397 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s",
+      "codec": "best_compression",
+      "max_result_window": 10000,
+      "similarity": {
+        "chunk_bm25": {
+          "type": "BM25",
+          "k1": 1.2,
+          "b": 0.4
+        }
+      },
+      "analysis": {
+        "char_filter": {
+          "ru_yo": {
+            "type": "mapping",
+            "mappings": [
+              "ё => е",
+              "Ё => Е"
+            ]
+          },
+          "ru_number_sign": {
+            "type": "mapping",
+            "mappings": [
+              "№ => № ",
+              "\\u00a0 => \\u0020",
+              "\\u2010 => -",
+              "\\u2011 => -",
+              "\\u2012 => -",
+              "\\u2013 => -",
+              "\\u2014 => -",
+              "\\u2015 => -",
+              "\\u2212 => -"
+            ]
+          },
+          "document_number_canonical": {
+            "type": "mapping",
+            "mappings": [
+              "№ => \\u0020",
+              "\\u00a0 => \\u0020",
+              "\\u0020-\\u0020 => -",
+              "\\u0020‐\\u0020 => -",
+              "\\u0020‑\\u0020 => -",
+              "\\u0020‒\\u0020 => -",
+              "\\u0020–\\u0020 => -",
+              "\\u0020—\\u0020 => -",
+              "\\u0020―\\u0020 => -",
+              "\\u0020−\\u0020 => -",
+              "\\u0020- => -",
+              "-\\u0020 => -",
+              "\\u0020‐ => -",
+              "‐\\u0020 => -",
+              "\\u0020‑ => -",
+              "‑\\u0020 => -",
+              "\\u0020‒ => -",
+              "‒\\u0020 => -",
+              "\\u0020– => -",
+              "–\\u0020 => -",
+              "\\u0020— => -",
+              "—\\u0020 => -",
+              "\\u0020― => -",
+              "―\\u0020 => -",
+              "\\u0020− => -",
+              "−\\u0020 => -",
+              "‐ => -",
+              "‑ => -",
+              "‒ => -",
+              "– => -",
+              "— => -",
+              "― => -",
+              "− => -",
+              "p => р",
+              "P => р",
+              "c => с",
+              "C => с",
+              "a => а",
+              "A => а",
+              "o => о",
+              "O => о",
+              "e => е",
+              "E => е",
+              "x => х",
+              "X => х",
+              "y => у",
+              "Y => у",
+              "k => к",
+              "K => к",
+              "m => м",
+              "M => м",
+              "t => т",
+              "T => т",
+              "h => н",
+              "H => н",
+              "b => в",
+              "B => в"
+            ]
+          }
+        },
+        "filter": {
+          "russian_stop": {
+            "type": "stop",
+            "stopwords": "_russian_"
+          },
+          "russian_stemmer": {
+            "type": "stemmer",
+            "language": "russian"
+          },
+          "english_stemmer": {
+            "type": "stemmer",
+            "language": "english"
+          },
+          "legal_word_delimiter": {
+            "type": "word_delimiter_graph",
+            "generate_word_parts": true,
+            "generate_number_parts": true,
+            "catenate_all": true,
+            "preserve_original": false,
+            "split_on_numerics": true,
+            "split_on_case_change": false,
+            "stem_english_possessive": false
+          },
+          "trim_empty": {
+            "type": "length",
+            "min": 1
+          },
+          "flatten_number_graph": {
+            "type": "flatten_graph"
+          }
+        },
+        "normalizer": {
+          "document_number_normalizer": {
+            "type": "custom",
+            "char_filter": [
+              "document_number_canonical"
+            ],
+            "filter": [
+              "lowercase",
+              "trim"
+            ]
+          },
+          "keyword_lowercase": {
+            "type": "custom",
+            "filter": [
+              "lowercase",
+              "trim"
+            ]
+          }
+        },
+        "analyzer": {
+          "russian_text": {
+            "type": "custom",
+            "char_filter": [
+              "ru_yo",
+              "ru_number_sign"
+            ],
+            "tokenizer": "standard",
+            "filter": [
+              "lowercase",
+              "russian_stop",
+              "russian_stemmer",
+              "english_stemmer",
+              "trim_empty"
+            ]
+          },
+          "russian_exact": {
+            "type": "custom",
+            "char_filter": [
+              "ru_yo",
+              "ru_number_sign"
+            ],
+            "tokenizer": "standard",
+            "filter": [
+              "lowercase",
+              "trim_empty"
+            ]
+          },
+          "document_number_index": {
+            "type": "custom",
+            "char_filter": [
+              "ru_number_sign"
+            ],
+            "tokenizer": "whitespace",
+            "filter": [
+              "lowercase",
+              "legal_word_delimiter",
+              "flatten_number_graph",
+              "trim_empty"
+            ]
+          },
+          "document_number_text": {
+            "type": "custom",
+            "char_filter": [
+              "ru_number_sign"
+            ],
+            "tokenizer": "whitespace",
+            "filter": [
+              "lowercase",
+              "legal_word_delimiter",
+              "trim_empty"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "url": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "page_url": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "file_url": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "parent_url": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "url_path": {
+        "type": "keyword",
+        "ignore_above": 1024
+      },
+      "source": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "doc_type": {
+        "type": "keyword",
+        "ignore_above": 32
+      },
+      "content_type": {
+        "type": "keyword",
+        "ignore_above": 128
+      },
+      "content_category": {
+        "type": "keyword",
+        "ignore_above": 64
+      },
+      "site_section": {
+        "type": "keyword",
+        "ignore_above": 512
+      },
+      "hash": {
+        "type": "keyword",
+        "ignore_above": 128
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "fields": {
+          "exact": {
+            "type": "text",
+            "analyzer": "russian_exact"
+          },
+          "raw": {
+            "type": "keyword",
+            "normalizer": "keyword_lowercase",
+            "ignore_above": 512
+          }
+        }
+      },
+      "section": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "norms": false,
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "normalizer": "keyword_lowercase",
+            "ignore_above": 512
+          }
+        }
+      },
+      "attachment_title": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "fields": {
+          "exact": {
+            "type": "text",
+            "analyzer": "russian_exact"
+          },
+          "raw": {
+            "type": "keyword",
+            "normalizer": "keyword_lowercase",
+            "ignore_above": 1024
+          }
+        }
+      },
+      "text": {
+        "type": "text",
+        "analyzer": "russian_text",
+        "similarity": "chunk_bm25",
+        "index_options": "offsets",
+        "fields": {
+          "exact": {
+            "type": "text",
+            "analyzer": "russian_exact",
+            "similarity": "chunk_bm25"
+          }
+        }
+      },
+      "document_number": {
+        "type": "keyword",
+        "normalizer": "document_number_normalizer",
+        "ignore_above": 128,
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "document_number_index",
+            "search_analyzer": "document_number_text"
+          }
+        }
+      },
+      "document_number_normalized": {
+        "type": "keyword",
+        "normalizer": "keyword_lowercase",
+        "ignore_above": 128
+      },
+      "document_kind": {
+        "type": "keyword",
+        "normalizer": "keyword_lowercase",
+        "ignore_above": 128,
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "russian_text"
+          }
+        }
+      },
+      "document_date": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "published_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "sort_date": {
+        "type": "date",
+        "format": "strict_date_optional_time||yyyy-MM-dd"
+      },
+      "fetched_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "is_attachment": {
+        "type": "boolean"
+      },
+      "page_number": {
+        "type": "integer"
+      },
+      "chunk_number": {
+        "type": "integer"
+      },
+      "extraction_version": {
+        "type": "keyword",
+        "ignore_above": 64
+      },
+      "text_extraction": {
+        "type": "keyword",
+        "ignore_above": 32
+      },
+      "ocr_used": {
+        "type": "boolean"
+      },
+      "ocr_confidence": {
+        "type": "float"
+      },
+      "source_page_count": {
+        "type": "integer"
+      },
+      "ocr_page_count": {
+        "type": "integer"
+      },
+      "ocr_attempted_page_count": {
+        "type": "integer"
+      },
+      "ocr_rejected_page_count": {
+        "type": "integer"
+      },
+      "unreadable_page_count": {
+        "type": "integer"
+      }
+    }
+  }
+}

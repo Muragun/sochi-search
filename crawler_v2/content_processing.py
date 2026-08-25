@@ -34,6 +34,7 @@ from .pdf_ocr import (
     extract_pdf_page_text,
     legal_header_needs_ocr,
 )
+from .text_repair import repair_ocr_text
 
 
 WHITESPACE_RE = re.compile(r"\s+")
@@ -114,6 +115,12 @@ class ExtractedContent:
     ocr_deferred_pages: tuple[int, ...] = ()
     unreadable_pages: tuple[int, ...] = ()
     source_page_count: int | None = None
+
+    # Уверенность Tesseract по каждой распознанной странице. Средним по
+    # ним заполняется поле `ocr_confidence` в индексе: по нему видно,
+    # какие документы стоит перечитать, когда дойдут руки, — эвристическая
+    # оценка текста этого не показывает.
+    ocr_confidences: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -521,10 +528,9 @@ def extract_published_at(
     )
 
     if element is None:
-        from crawler_v2.legal_metadata import (
-            extract_labeled_value,
-            parse_russian_date,
-        )
+        # `parse_russian_date` уже импортирован на уровне модуля; локальный
+        # импорт только заслонял его тем же именем.
+        from crawler_v2.legal_metadata import extract_labeled_value
 
         return parse_russian_date(
             extract_labeled_value(
@@ -1171,6 +1177,13 @@ def _ocr_page_with_tesseract(
         working_directory=working_directory,
         deskew=settings.pdf_ocr_deskew,
         binarize=settings.pdf_ocr_binarize,
+        sauvola_k=settings.pdf_ocr_sauvola_k,
+        confidence_floor=settings.pdf_ocr_confidence_floor,
+        retry_sauvola_k=settings.pdf_ocr_retry_sauvola_k,
+        retry_rotations=settings.pdf_ocr_retry_rotations,
+        ladder_budget_seconds=(
+            settings.pdf_ocr_ladder_budget_seconds
+        ),
     )
 
     if result.blank:
@@ -1196,8 +1209,9 @@ def _ocr_page_with_tesseract(
             method="ocr",
             quality=ocr_quality,
             ocr_attempted=True,
-            rotation=0,
+            rotation=result.rotation,
             error=result.error,
+            confidence=result.confidence,
         )
 
     if native_quality.readable:
@@ -1215,6 +1229,7 @@ def _ocr_page_with_tesseract(
     details = [
         f"native={native_quality.reason}",
         f"ocr={ocr_quality.reason}:{ocr_quality.score}",
+        f"confidence={result.confidence:.0f}",
     ]
 
     if result.timed_out:
@@ -1296,6 +1311,7 @@ def _extract_pdf_in_process(
 
         pages: list[tuple[int, str]] = []
         ocr_pages: list[int] = []
+        ocr_confidences: list[float] = []
         ocr_attempted_pages: list[int] = []
         ocr_rejected_pages: list[int] = []
         ocr_rejection_reasons: list[str] = []
@@ -1348,10 +1364,24 @@ def _extract_pdf_in_process(
                 continue
 
             try:
+                # Склейка переносов нужна и здесь, а не только после OCR:
+                # в вёрстке правовых актов строка выравнивается по ширине,
+                # и слова рвутся дефисом независимо от того, есть у PDF
+                # текстовый слой или нет. «благоустрой-\nство» — два
+                # токена в индексе, и ни один не найдётся по запросу
+                # «благоустройство».
+                #
+                # Письменность здесь намеренно не чинится: на этом тексте
+                # принимается решение, запускать ли OCR, и подмена букв
+                # сдвинула бы оценку качества слоя.
                 native_text = normalize_text(
-                    page.get_text(
-                        "text",
-                        sort=True,
+                    repair_ocr_text(
+                        page.get_text(
+                            "text",
+                            sort=True,
+                        ),
+                        fix_mixed_script=False,
+                        fix_document_numbers=False,
                     )
                 )
 
@@ -1526,6 +1556,11 @@ def _extract_pdf_in_process(
                     page_number
                 )
 
+                if page_text.confidence > 0:
+                    ocr_confidences.append(
+                        page_text.confidence
+                    )
+
             if page_text.text:
                 pages.append(
                     (
@@ -1636,6 +1671,9 @@ def _extract_pdf_in_process(
             ),
             ocr_pages=tuple(
                 ocr_pages
+            ),
+            ocr_confidences=tuple(
+                ocr_confidences
             ),
             ocr_attempted_pages=tuple(
                 ocr_attempted_pages

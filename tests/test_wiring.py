@@ -20,8 +20,13 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compat import standard_library_modules, unparse  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -58,8 +63,9 @@ ENTRY_POINTS = {
     "ops.verify_backup",
     "ops.wait_for_elasticsearch",
     "ops.validate_elasticsearch",
-    "ops.reindex_v3",
+    "ops.reindex",
     "ops.init_state",
+    "ops.ocr_benchmark",
 }
 
 
@@ -132,6 +138,46 @@ class ModuleWiringTests(unittest.TestCase):
                     ),
                 )
 
+    def test_no_unexpected_python_packages(self) -> None:
+        """
+        Проверка орфанов смотрит только в три пакета — значит, четвёртый
+        пройдёт мимо неё целиком.
+
+        Так и вышло с пакетом `app/` — первой версией сервиса, десять
+        модулей. В репозитории на него ничто не ссылалось: ни Dockerfile,
+        ни юниты из `systemd/`, ни тесты. Но на сервере он работал:
+        `sochi-search.service` был заведён на машине руками и поднимал
+        его на отдельном порту, отдавая выдачу из отдельного индекса,
+        который не обновлялся с переезда на `app_v2`. Из репозитория
+        этого не видно вообще никак.
+
+        Служба остановлена, пакет удалён. Урок остаётся в этом тесте:
+        появление пакета вне списка — повод разобраться, а не
+        предположить, что он мёртвый.
+        """
+
+        expected = {"crawler_v2", "app_v2", "ops", "tests"}
+        found = {
+            path.parent.name
+            for path in SOURCE.glob("*/__init__.py")
+        } | {
+            path.name
+            for path in SOURCE.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and any(path.glob("*.py"))
+        }
+
+        self.assertEqual(
+            found - expected,
+            set(),
+            msg=(
+                "Появился пакет Python вне списка проверяемых. Либо "
+                "добавьте его в python_files(), либо удалите: иначе "
+                "проверка связок его не увидит"
+            ),
+        )
+
     def test_no_orphan_modules(self) -> None:
         """Каждый модуль либо точка входа, либо кем-то импортируется."""
         all_modules = {module_name(p): p for p in python_files()}
@@ -159,6 +205,165 @@ class ModuleWiringTests(unittest.TestCase):
                 f"точки входа: {orphans}"
             ),
         )
+
+
+class VersionIsConsistentTests(unittest.TestCase):
+    """
+    Версия проекта записана в шести местах, источник истины один — VERSION.
+
+    До этого теста они разъезжались молча: файл `VERSION`,
+    `RELEASE_VERSION` в резервном копировании, `User-Agent` проверки
+    готовности, тег образа в compose, `MODULE_VERSION` обходчика и версия
+    FastAPI жили каждый своей жизнью. Расхождение никак не проявляется до
+    того дня, когда по версии в журнале или в имени образа нужно понять,
+    что именно запущено.
+    """
+
+    def declared_version(self) -> str:
+        return (SOURCE / "VERSION").read_text(encoding="utf-8").strip()
+
+    def test_every_place_matches_version_file(self) -> None:
+        version = self.declared_version()
+
+        places = {
+            "ops/backup.py": 'RELEASE_VERSION = "%s"' % version,
+            "ops/wait_for_elasticsearch.py": (
+                "sochi-search-readiness/%s" % version
+            ),
+            "docker-compose.app.yml": (
+                "image: sochi-search-app:%s" % version
+            ),
+            "crawler_v2/discovery_worker_v2.py": (
+                'MODULE_VERSION = "%s"' % version
+            ),
+            "app_v2/main.py": 'version="%s"' % version,
+        }
+
+        problems: list[str] = []
+
+        for name, expected in places.items():
+            source = (SOURCE / name).read_text(encoding="utf-8")
+
+            if expected not in source:
+                problems.append("%s: нет «%s»" % (name, expected))
+
+        self.assertEqual(
+            problems,
+            [],
+            msg=(
+                "VERSION говорит %s, а в коде другое: %s"
+                % (version, "; ".join(problems))
+            ),
+        )
+
+
+class PrintedCommandsExistTests(unittest.TestCase):
+    """
+    Команда, которую инструмент печатает пользователю, должна работать.
+
+    `ops/reindex.py` печатал подсказку отката с именем `ops.reindex_v3` —
+    модулем, которого больше нет: строку не поправили при переименовании.
+    Заметить это можно было только в тот момент, когда откат понадобился,
+    то есть в самый неподходящий.
+    """
+
+    MODULE_RE = re.compile(r"python -m ([a-z_]+)\.([a-z_0-9]+)")
+
+    def test_every_printed_module_exists(self) -> None:
+        problems: list[str] = []
+
+        for package in ("ops", "crawler_v2", "app_v2"):
+            for path in sorted((SOURCE / package).glob("*.py")):
+                source = path.read_text(encoding="utf-8")
+
+                for match in self.MODULE_RE.finditer(source):
+                    module = SOURCE / match.group(1) / (
+                        match.group(2) + ".py"
+                    )
+
+                    if not module.is_file():
+                        problems.append(
+                            f"{path.name}: печатает "
+                            f"«python -m {match.group(1)}."
+                            f"{match.group(2)}», такого модуля нет"
+                        )
+
+        self.assertEqual(problems, [], msg="; ".join(problems))
+
+
+class TestSuiteRunsOnPython38Tests(unittest.TestCase):
+    """
+    Набор тестов обязан запускаться там, где работает система.
+
+    Проект заявляет 3.8, и на сервере стоит именно 3.8. При этом сами
+    тесты пользовались `ast.unparse` (3.9) и `sys.stdlib_module_names`
+    (3.10): на машине разработчика с 3.11 всё было зелено, на сервере
+    три проверки падали. Получалось, что проверить систему на той версии,
+    на которой она работает, нельзя — а это единственная проверка, что
+    выкладка не сломает API.
+
+    Версионные вызовы допускаются только в `tests/compat.py`: там они
+    закрыты проверкой наличия и запасным путём.
+    """
+
+    # Имя — версия, в которой оно появилось.
+    TOO_NEW = {
+        "unparse": "3.9",
+        "stdlib_module_names": "3.10",
+        "removeprefix": "3.9",
+        "removesuffix": "3.9",
+        "pairwise": "3.10",
+        "cache": "3.9",
+    }
+
+    def test_suite_avoids_newer_than_38_apis(self) -> None:
+        problems: list[str] = []
+
+        for path in sorted((SOURCE / "tests").glob("*.py")):
+            if path.name == "compat.py":
+                continue
+
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute):
+                    continue
+
+                since = self.TOO_NEW.get(node.attr)
+
+                if since is None:
+                    continue
+
+                problems.append(
+                    f"{path.name}:{node.lineno}: .{node.attr} "
+                    f"появился в Python {since}"
+                )
+
+        self.assertEqual(
+            problems,
+            [],
+            msg=(
+                "Тесты пользуются тем, чего нет в Python 3.8, — на "
+                "сервере они упадут. Замена есть в tests/compat.py: "
+                + "; ".join(problems)
+            ),
+        )
+
+    def test_whole_suite_parses_as_python_38(self) -> None:
+        problems: list[str] = []
+
+        for path in sorted((SOURCE / "tests").glob("*.py")):
+            try:
+                ast.parse(
+                    path.read_text(encoding="utf-8"),
+                    feature_version=(3, 8),
+                )
+            except SyntaxError as error:
+                problems.append(
+                    f"{path.name}:{error.lineno}: {error.msg}"
+                )
+
+        self.assertEqual(problems, [], msg="; ".join(problems))
 
 
 class SystemdContractTests(unittest.TestCase):
@@ -589,9 +794,11 @@ class RequirementsTests(unittest.TestCase):
         )
 
     def test_every_third_party_import_is_declared(self) -> None:
-        import sys
-
-        standard = set(getattr(sys, "stdlib_module_names", ()))
+        # `sys.stdlib_module_names` появился в 3.10. На 3.8, где проект
+        # и работает, `getattr(..., ())` отдавал пустое множество, и
+        # незаявленными считались все сорок стандартных модулей — от
+        # `json` до `sqlite3`.
+        standard = standard_library_modules()
         missing = sorted(
             name
             for name in self.imported_modules()
@@ -633,22 +840,22 @@ class Python38RuntimeAnnotationTests(unittest.TestCase):
 
         for item in ast.walk(node):
             if isinstance(item, ast.BinOp) and isinstance(item.op, ast.BitOr):
-                found.append(ast.unparse(item))
+                found.append(unparse(item))
 
             if (
                 isinstance(item, ast.Subscript)
                 and isinstance(item.value, ast.Name)
                 and item.value.id in self.BUILTIN_GENERICS
             ):
-                found.append(ast.unparse(item))
+                found.append(unparse(item))
 
         return found
 
     @staticmethod
     def is_route_handler(node: ast.AST) -> bool:
         return any(
-            "router" in ast.unparse(decorator)
-            or ast.unparse(decorator).startswith("app.")
+            "router" in unparse(decorator)
+            or unparse(decorator).startswith("app.")
             for decorator in node.decorator_list
         )
 
@@ -680,7 +887,7 @@ class Python38RuntimeAnnotationTests(unittest.TestCase):
                         )
 
                 if isinstance(node, ast.ClassDef) and any(
-                    "BaseModel" in ast.unparse(base) for base in node.bases
+                    "BaseModel" in unparse(base) for base in node.bases
                 ):
                     found = []
 

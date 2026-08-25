@@ -18,6 +18,10 @@ import unittest
 from pathlib import Path
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compat import unparse  # noqa: E402
+
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE))
 
@@ -177,7 +181,7 @@ class AdminSecurityTests(unittest.TestCase):
                 continue
 
             defaults = [
-                ast.unparse(value)
+                unparse(value)
                 for value in node.args.defaults
             ]
 

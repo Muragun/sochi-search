@@ -31,7 +31,7 @@ IGNORED_PATH_PREFIXES = ("/bitrix/", "/local/")
 IGNORED_SCHEMES = ("tel:", "mailto:", "javascript:", "data:")
 IGNORED_QUERY_PARAMETERS = {"gclid", "yclid", "fbclid", "_openstat"}
 ALLOWED_QUERY_PARAMETERS = {"element_id", "section_id", "id", "year", "page"}
-MODULE_VERSION = "2.5.0"
+MODULE_VERSION = "2.6.0"
 DEFAULT_MAX_PAGINATION_PAGE = settings.max_pagination_page
 FETCH_PATH_OVERRIDES = {
     "/press-sluzhba/": "/press-sluzhba/novosti/",
