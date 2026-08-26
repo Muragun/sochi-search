@@ -572,9 +572,36 @@ class BackupRoleTests(unittest.TestCase):
     отвечает заданным кодом.
     """
 
-    ENTRYPOINT = (
-        Path(__file__).resolve().parents[1] / "docker" / "entrypoint.sh"
+    # Точка входа лежит по-разному в репозитории и в образе, и это не
+    # случайность: Dockerfile кладёт её сразу в PATH
+    # (`COPY docker/entrypoint.sh /usr/local/bin/entrypoint`), а каталога
+    # `docker/` в образе нет вовсе.
+    #
+    # Проверка нужна в обеих средах — она про поведение роли, а не про
+    # раскладку файлов, — поэтому ищется в обоих местах. Первая версия
+    # знала только про репозиторий и внутри образа падала с кодом 127:
+    # «команда не найдена», без единого слова о том, какая.
+    ENTRYPOINT_LOCATIONS = (
+        Path(__file__).resolve().parents[1] / "docker" / "entrypoint.sh",
+        Path("/usr/local/bin/entrypoint"),
     )
+
+    @classmethod
+    def entrypoint(cls):
+        for candidate in cls.ENTRYPOINT_LOCATIONS:
+            if candidate.is_file():
+                return candidate
+
+        return None
+
+    def setUp(self) -> None:
+        if self.entrypoint() is None:
+            self.skipTest(
+                "точка входа не найдена ни в репозитории, ни в PATH: "
+                + ", ".join(
+                    str(path) for path in self.ENTRYPOINT_LOCATIONS
+                )
+            )
 
     def run_pass(self, *, failing_module: str = ""):
         """Возвращает (код возврата, список вызванных модулей)."""
@@ -610,7 +637,7 @@ class BackupRoleTests(unittest.TestCase):
                 # выполнять его целиком означало бы запустить роль.
                 "eval \"$(sed -n '/^run_backup_pass()/,/^}/p' %s)\"\n"
                 "run_backup_pass\n"
-            ) % (stub, self.ENTRYPOINT)
+            ) % (stub, self.entrypoint())
 
             completed = subprocess.run(
                 ["bash", "-c", script],
