@@ -258,7 +258,10 @@ class VersionIsConsistentTests(unittest.TestCase):
                 'MODULE_VERSION = "%s"' % version
             ),
             "crawler_v2/config.py": (
-                '"SochiSearch/%s"' % version
+                # Без закрывающей кавычки: после версии в User-Agent
+                # идёт пояснение в скобках, и оно должно быть можно
+                # менять, не трогая проверку версий.
+                'SochiSearch/%s' % version
             ),
             ".env.production.example": (
                 "CRAWL_USER_AGENT=SochiSearch/%s" % version
