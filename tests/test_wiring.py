@@ -66,6 +66,7 @@ ENTRY_POINTS = {
     "ops.reindex",
     "ops.init_state",
     "ops.ocr_benchmark",
+    "ops.requeue",
 }
 
 

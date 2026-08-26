@@ -8,6 +8,7 @@ from .es_http import es_client
 from crawler_v2.pdf_ocr import (
     looks_like_garbled_text,
 )
+from crawler_v2.text_repair import technical_filename
 
 
 HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -143,6 +144,9 @@ def is_generic_title(title: str) -> bool:
     lowered = normalize_text(title).casefold()
 
     if not lowered:
+        return True
+
+    if technical_filename(lowered):
         return True
 
     if lowered in {

@@ -769,9 +769,16 @@ class IncrementalStateDatabase:
         error_message: str,
         http_status: int = 200,
     ) -> None:
+        # `skipped_too_large` здесь не было, хотя обходчик его ставит, а
+        # панель управления показывает. Воркер ловил DocumentTooLargeError,
+        # вызывал mark_skipped — и падал с ValueError. Очередь разбирается
+        # по порядку, поэтому падал он на одном и том же документе каждый
+        # запуск: на рабочем сервере это остановило индексацию целиком,
+        # упёршись в PDF на 237 МБ.
         allowed_statuses = {
             "skipped_corrupt",
             "skipped_empty",
+            "skipped_too_large",
             "skipped_unsupported",
         }
 
@@ -780,8 +787,13 @@ class IncrementalStateDatabase:
                 f"Недопустимый статус пропуска: {status}"
             )
 
+        # Слишком большой файл меньше не станет, поэтому статус
+        # терминальный — как у повреждённого и неподдерживаемого. Такие
+        # документы разбираются вручную по одному, а находятся по
+        # карточке родительской страницы, где есть название и реквизиты.
         terminal = status in {
             "skipped_corrupt",
+            "skipped_too_large",
             "skipped_unsupported",
         }
 
