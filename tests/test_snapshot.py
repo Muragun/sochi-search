@@ -213,6 +213,50 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("перезапуск узла", message)
         self.assertIn("/snapshots", message)
 
+    def test_unwritable_repository_names_the_owner_problem(self) -> None:
+        """
+        Второй отказ первого запуска, и он идёт сразу за первым.
+
+        `path.repo` разрешает кластеру писать в каталог, но не делает
+        каталог доступным для записи: свежий том Docker создаётся от
+        root, а Elasticsearch в образе работает под uid 1000.
+
+        Сообщение кластера сбивает с толку — «path is not accessible on
+        master node» читается как «путь не тот», хотя путь ровно тот.
+        Настоящая причина лежит на два уровня глубже, в
+        `access_denied_exception`.
+        """
+
+        cluster = FakeCluster(
+            repository=None,
+            responses={
+                ("PUT", "/_snapshot/sochi"): SnapshotError(
+                    "Elasticsearch ответил 500: "
+                    '{"type":"repository_verification_exception",'
+                    '"reason":"[sochi] path  is not accessible on '
+                    'master node","caused_by":{"type":'
+                    '"access_denied_exception","reason":'
+                    '"/snapshots/tests-r1SQOt6QSQCdeeXn7fEYsg"}}'
+                )
+            },
+        )
+
+        with self.assertRaises(SnapshotError) as caught:
+            ensure_repository(
+                cluster,
+                repository="sochi",
+                location="/snapshots",
+            )
+
+        message = str(caught.exception)
+
+        self.assertIn("chown 1000:0", message)
+        self.assertIn("uid 1000", message)
+
+        # Соседний отказ про path.repo не должен подменять этот: причины
+        # разные, и советы к ним разные.
+        self.assertNotIn("elasticsearch.yml", message)
+
     def test_repository_pointing_elsewhere_is_an_error(self) -> None:
         """
         Перерегистрация потеряла бы ссылку на снятые снимки.
