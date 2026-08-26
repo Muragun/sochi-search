@@ -1,0 +1,31 @@
+[Unit]
+Description=Sochi Search Elasticsearch index snapshot
+Documentation=file:/opt/sochi-search/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/sochi-search
+EnvironmentFile=-/opt/sochi-search/.env
+ExecStart=/opt/sochi-search/.venv/bin/python -B -m ops.snapshot
+# Снимок инкрементальный, но первый — это весь индекс: около восьми
+# гигабайт на текущем корпусе. Кластер отвечает только по завершении,
+# поэтому предел выставлен с запасом.
+TimeoutStartSec=2h
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# Снимок кладёт файлы не сюда: их пишет сам Elasticsearch, в свой
+# path.repo. Отсюда уходит только HTTP-запрос, поэтому в отличие от
+# копии очереди эта служба сети требует, а записи на диск — нет.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

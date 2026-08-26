@@ -13,9 +13,6 @@ import sys
 import unittest
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app_v2.search_query import (  # noqa: E402
@@ -25,14 +22,38 @@ from app_v2.search_query import (  # noqa: E402
     looks_like_document_number,
     normalize_document_number,
 )
-from crawler_v2.pdf_ocr_engine import (  # noqa: E402
-    choose_render_dpi,
-    page_order,
-)
-from crawler_v2.pdf_ocr_image import (  # noqa: E402
-    estimate_skew,
-    prepare_page,
-    sauvola_binarize,
+
+# Заголовок модуля обещает запуск без внешних зависимостей, и для
+# построителя запроса, схемы индекса и разбора ответа это правда. Для
+# подготовки изображения — нет: `pdf_ocr_image` импортирует numpy и
+# Pillow, а `pdf_ocr_engine` импортирует его.
+#
+# Раньше эти три импорта стояли наверху без защиты, и на машине без
+# numpy весь модуль падал с ошибкой загрузки: `unittest discover`
+# показывал ERROR вместо пропуска и вместе с семью проверками
+# изображения терял сорок проверок, которым библиотеки не нужны вовсе.
+# Пропускается ровно то, что действительно нельзя проверить.
+try:
+    import numpy as np
+    from PIL import Image
+
+    from crawler_v2.pdf_ocr_engine import (
+        choose_render_dpi,
+        page_order,
+    )
+    from crawler_v2.pdf_ocr_image import (
+        estimate_skew,
+        prepare_page,
+        sauvola_binarize,
+    )
+
+    IMAGE_STACK = True
+except ImportError:  # pragma: no cover — среда без numpy или Pillow
+    IMAGE_STACK = False
+
+NEEDS_IMAGE_STACK = unittest.skipUnless(
+    IMAGE_STACK,
+    "нужны numpy и Pillow: проверяется подготовка изображения",
 )
 
 MAPPING_PATH = (
@@ -259,6 +280,7 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(self.mapping["mappings"]["dynamic"], "strict")
 
 
+@NEEDS_IMAGE_STACK
 class RenderDpiTests(unittest.TestCase):
     def test_uses_native_resolution_of_embedded_scan(self) -> None:
         # A4 (595x842 pt), вложенный растр 2480x3508 → примерно 300 dpi.
@@ -334,6 +356,7 @@ class RenderDpiTests(unittest.TestCase):
         )
 
 
+@NEEDS_IMAGE_STACK
 class PageOrderTests(unittest.TestCase):
     def test_priority_pages_come_first(self) -> None:
         self.assertEqual(
@@ -350,6 +373,7 @@ class PageOrderTests(unittest.TestCase):
         self.assertEqual(sorted(order), list(range(40)))
 
 
+@NEEDS_IMAGE_STACK
 class PreprocessingTests(unittest.TestCase):
     @staticmethod
     def make_page(

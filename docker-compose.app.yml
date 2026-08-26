@@ -22,6 +22,22 @@ x-container-env: &container-env
   CRAWL_PDF_OCR_TESSDATA: /app/ocr/tessdata
   ADMIN_TASK_DIR: /app/run/admin-tasks
 
+# Ограничение журналов контейнера.
+#
+# Драйвер json-file по умолчанию не имеет предела: файл растёт, пока не
+# кончится диск. Здесь это не абстракция — семь контейнеров работают
+# непрерывно, разбор очереди и распознавание печатают строку прогресса
+# на документ, а под всё про всё отведено 20 ГБ, на которых лежит ещё и
+# индекс. Заполненный диск останавливает и Elasticsearch, и обход.
+#
+# Три файла по 20 МБ на контейнер — это около 420 МБ на всё
+# развёртывание и примерно неделя журналов при нынешнем темпе.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "${LOG_MAX_SIZE:-20m}"
+    max-file: "${LOG_MAX_FILES:-3}"
+
 x-app: &app
   build:
     context: .
@@ -38,8 +54,27 @@ x-app: &app
     - backups:/app/backups
   networks:
     - search
+  logging: *logging
   depends_on:
-    - elasticsearch
+    elasticsearch:
+      # Ожидание переехало из entrypoint в compose не полностью: роль
+      # по-прежнему ждёт кластер сама, потому что под systemd никакого
+      # compose нет. Здесь условие добавляет то, чего скриптом не
+      # сделать, — `docker compose up` не сообщает «поднято», пока
+      # кластер не отвечает.
+      condition: service_healthy
+
+# Проверка живости, которая не подходит рабочим ролям.
+#
+# HEALTHCHECK объявлен в образе, а образ у всех ролей один: curl стучится
+# в порт 8000, но uvicorn слушает его только в роли `api`. Остальные шесть
+# контейнеров навсегда получали статус unhealthy — `docker compose ps`
+# показывал развёрнутую систему как сломанную, и любой внешний присмотр,
+# который смотрит на статус, оказывался бесполезен.
+#
+# Роли без HTTP-порта проверку отключают.
+x-no-healthcheck: &no-healthcheck
+  disable: true
 
 services:
 
@@ -63,12 +98,14 @@ services:
     <<: *app
     container_name: sochi-search-worker
     command: ["worker"]
+    healthcheck: *no-healthcheck
     mem_limit: 900m
 
   discovery:
     <<: *app
     container_name: sochi-search-discovery
     command: ["discovery"]
+    healthcheck: *no-healthcheck
     mem_limit: 512m
 
   ocr-1:
@@ -78,6 +115,7 @@ services:
     environment:
       <<: *container-env
       OCR_SLOT: "1"
+    healthcheck: *no-healthcheck
     mem_limit: 700m
     cpus: 1.0
 
@@ -88,6 +126,7 @@ services:
     environment:
       <<: *container-env
       OCR_SLOT: "2"
+    healthcheck: *no-healthcheck
     mem_limit: 700m
     cpus: 1.0
 
@@ -95,6 +134,7 @@ services:
     <<: *app
     container_name: sochi-search-publication-date
     command: ["publication-date"]
+    healthcheck: *no-healthcheck
     mem_limit: 400m
 
 
@@ -102,6 +142,7 @@ services:
     <<: *app
     container_name: sochi-search-backup
     command: ["backup"]
+    healthcheck: *no-healthcheck
     mem_limit: 300m
 
 volumes:

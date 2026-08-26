@@ -287,5 +287,86 @@ class OperationalBackupTests(unittest.TestCase):
         )
 
 
+class RestorableSourceTests(unittest.TestCase):
+    """
+    Копия обязана содержать то, чем система запускается, а не только код.
+
+    Список файлов в копии проверялся глазами, и в нём не хватало ровно
+    того, без чего восстановление не заканчивается запуском: Dockerfile,
+    docker-compose.app.yml с описанием всех семи ролей, точка входа
+    образа, deploy.sh и юниты systemd. Восстанавливающий получал
+    исходники и собирал окружение заново по памяти — в тот день, когда
+    времени на это меньше всего.
+
+    Незаявленные записи пропускаются молча (`if source.exists()`),
+    поэтому ошибка в списке ничем не проявлялась: копия собиралась,
+    отчитывалась об успехе и была неполной.
+
+    Здесь список сверяется не сам с собой, а с содержимым репозитория:
+    новый файл верхнего уровня, нужный для запуска, обязан быть в него
+    добавлен.
+    """
+
+    PROJECT = Path(__file__).resolve().parents[1]
+
+    # Чем система запускается. Список короткий и меняется редко, поэтому
+    # перечислен явно: это и есть предмет проверки.
+    LAUNCH_ESSENTIALS = (
+        "Dockerfile",
+        "docker",
+        "docker-compose.yml",
+        "docker-compose.app.yml",
+        "docker-compose.override.yml",
+        "deploy.sh",
+        "systemd",
+        "requirements.txt",
+        "VERSION",
+    )
+
+    def test_launch_essentials_are_backed_up(self) -> None:
+        from ops.backup import DEFAULT_SOURCE_ENTRIES
+
+        missing = [
+            name
+            for name in self.LAUNCH_ESSENTIALS
+            if name not in DEFAULT_SOURCE_ENTRIES
+        ]
+
+        self.assertEqual(
+            missing,
+            [],
+            msg=(
+                "Без этих файлов из копии не поднять систему, а они в "
+                "неё не попадают: " + ", ".join(missing)
+            ),
+        )
+
+    def test_every_listed_entry_exists(self) -> None:
+        """
+        Запись, которой нет в репозитории, — это забытая уборка.
+
+        Так в списке годами оставался пакет `app`: первую версию сервиса
+        удалили, строку — нет. Копирование пропускает несуществующее
+        молча, поэтому строка не мешала и не значила ничего.
+        """
+
+        from ops.backup import DEFAULT_SOURCE_ENTRIES
+
+        missing = [
+            name
+            for name in DEFAULT_SOURCE_ENTRIES
+            if not (self.PROJECT / name).exists()
+        ]
+
+        self.assertEqual(
+            missing,
+            [],
+            msg=(
+                "Этих записей в репозитории нет — копирование пропустит "
+                "их молча: " + ", ".join(missing)
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,8 +18,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
-from PIL import Image
+# Пропуск объявляется до импорта numpy и Pillow, а не после.
+#
+# Модуль строит страницы массивами, поэтому без этих библиотек его тесты
+# бессмысленны — но `import numpy` на голой машине бросал ImportError, и
+# `unittest discover` показывал ошибку загрузки вместо пропуска. Роль
+# `tests` в образе обещает обратное: «тесты, которым нужны отсутствующие
+# библиотеки, объявляют пропуск сами». Здесь это обещание не работало.
+try:
+    import numpy as np
+    from PIL import Image
+except ImportError:  # pragma: no cover — среда без numpy или Pillow
+    raise unittest.SkipTest(
+        "нужны numpy и Pillow: тесты собирают страницы массивами"
+    )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

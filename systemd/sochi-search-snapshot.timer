@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily Sochi Search index snapshot
+Documentation=file:/opt/sochi-search/OPERATIONS.md
+
+[Timer]
+# На двадцать минут позже копии очереди (03:40). Обе задачи нагружают
+# диск, и разводить их дешевле, чем разбираться потом, почему ночью
+# растёт очередь ввода-вывода.
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=sochi-search-snapshot.service
+
+[Install]
+WantedBy=timers.target

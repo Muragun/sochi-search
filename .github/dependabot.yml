@@ -1,0 +1,63 @@
+# Обновления зависимостей отдельными правками.
+#
+# Это вторая половина решения про верхние границы версий. Границы
+# закрывают одну беду — пересборка образа перестала быть тихим
+# обновлением половины библиотек, — и открывают другую: закреплённые
+# версии не обновляются вообще, и через год проект стоит на выпусках,
+# в которых с тех пор чинили и уязвимости.
+#
+# Отсюда правило: граница поднимается правкой, у которой есть прогон
+# тестов и автор. Dependabot такие правки заводит, CI их проверяет,
+# принимает человек.
+
+version: 2
+
+updates:
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Moscow
+    # Больше пяти открытых правок про зависимости — это уже не помощь.
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "Зависимости"
+    groups:
+      # Мелкие обновления одной правкой: разбирать их по одному не
+      # стоит потраченного времени.
+      patch-and-minor:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+
+  # Базовый образ Python и образ Elasticsearch. Версия кластера
+  # закреплена точно (8.19.17): её обновление — это обновление данных, а
+  # не библиотеки, и смотреть на него нужно отдельно.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /docker
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "Образ"
+    labels:
+      - dependencies
+
+  # Сами действия в workflow тоже стареют, и устаревшее действие в один
+  # день просто перестаёт запускаться.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "Проверки"
+    labels:
+      - dependencies

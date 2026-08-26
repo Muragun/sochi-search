@@ -19,8 +19,11 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -60,6 +63,7 @@ ENTRY_POINTS = {
     "crawler_v2.state_stats",
     "app_v2.main",
     "ops.backup",
+    "ops.snapshot",
     "ops.verify_backup",
     "ops.wait_for_elasticsearch",
     "ops.validate_elasticsearch",
@@ -210,7 +214,7 @@ class ModuleWiringTests(unittest.TestCase):
 
 class VersionIsConsistentTests(unittest.TestCase):
     """
-    Версия проекта записана в шести местах, источник истины один — VERSION.
+    Версия проекта записана во многих местах, источник истины один — VERSION.
 
     До этого теста они разъезжались молча: файл `VERSION`,
     `RELEASE_VERSION` в резервном копировании, `User-Agent` проверки
@@ -218,6 +222,14 @@ class VersionIsConsistentTests(unittest.TestCase):
     FastAPI жили каждый своей жизнью. Расхождение никак не проявляется до
     того дня, когда по версии в журнале или в имени образа нужно понять,
     что именно запущено.
+
+    Проверка перечисляла места по одному, и два из них в перечень не
+    попали — оба про `User-Agent` обходчика. Это единственная строка
+    проекта, которую видит чужая сторона: она стоит напротив каждого
+    запроса в журналах sochi.ru. В примере настроек стояло
+    «SochiSearch/2.5.0», в значении по умолчанию — «SochiSearchBot/2.0»,
+    и по журналу сайта нельзя было понять ни версию, ни даже имя того,
+    кто пришёл.
     """
 
     def declared_version(self) -> str:
@@ -228,6 +240,9 @@ class VersionIsConsistentTests(unittest.TestCase):
 
         places = {
             "ops/backup.py": 'RELEASE_VERSION = "%s"' % version,
+            "ops/snapshot.py": (
+                'USER_AGENT = "sochi-search-snapshot/%s"' % version
+            ),
             "ops/wait_for_elasticsearch.py": (
                 "sochi-search-readiness/%s" % version
             ),
@@ -236,6 +251,12 @@ class VersionIsConsistentTests(unittest.TestCase):
             ),
             "crawler_v2/discovery_worker_v2.py": (
                 'MODULE_VERSION = "%s"' % version
+            ),
+            "crawler_v2/config.py": (
+                '"SochiSearch/%s"' % version
+            ),
+            ".env.production.example": (
+                "CRAWL_USER_AGENT=SochiSearch/%s" % version
             ),
             "app_v2/main.py": 'version="%s"' % version,
         }
@@ -365,6 +386,142 @@ class TestSuiteRunsOnPython38Tests(unittest.TestCase):
                 )
 
         self.assertEqual(problems, [], msg="; ".join(problems))
+
+
+# Метка рекурсии: дочерний процесс не должен снова запускать этот тест.
+BARE_RUN_MARKER = "SOCHI_TESTS_BARE_RUN"
+
+# Библиотеки, отсутствие которых набор обязан переживать пропуском.
+#
+# Это те, ради которых в тестах уже стоят защитные конструкции:
+# обработка изображений, разбор PDF и офисных форматов. Клиентские
+# библиотеки (`requests`, `fastapi`) сюда не входят намеренно — часть
+# тестов запускает дочерние процессы и проверяет как раз то, что
+# импорт проходит; отключать их означало бы ломать эти проверки, а не
+# воспроизводить голую машину.
+OPTIONAL_LIBRARIES = (
+    "numpy",
+    "PIL",
+    "pymupdf",
+    "fitz",
+    "docx",
+    "openpyxl",
+    "lxml",
+)
+
+
+class SuiteLoadsWithoutOptionalLibrariesTests(unittest.TestCase):
+    """
+    Набор тестов обязан загружаться там, где ничего не установлено.
+
+    Роль `tests` в образе обещает именно это: «тесты, которым нужны
+    отсутствующие библиотеки, объявляют пропуск сами, поэтому
+    перечислять модули руками не нужно». Обещание держалось не везде.
+    `test_ocr_engine` и `test_v250_units` импортировали numpy и Pillow
+    сразу за `import unittest`, и на свежей копии репозитория
+    `unittest discover` показывал два ERROR вместо двух пропусков.
+
+    Разница не косметическая. Ошибка загрузки модуля — это ненайденные
+    тесты: в `test_v250_units` вместе с семью проверками изображения
+    молча выпадали сорок проверок построителя запроса и схемы индекса,
+    которым никакие библиотеки не нужны. Набор при этом выглядел
+    красным, а не «неполным», и разобраться в этом можно было только
+    вручную.
+
+    Проверяется поведение, а не форма записи: набор запускается заново в
+    отдельном процессе, где перечисленные библиотеки объявлены
+    отсутствующими, и в выводе не должно быть ни одной ошибки загрузки.
+    """
+
+    def blocker_source(self) -> str:
+        """Импортозаградитель для дочернего процесса."""
+
+        return (
+            "import sys\n"
+            "\n"
+            "BLOCKED = %r\n"
+            "\n"
+            "\n"
+            "class Blocker:\n"
+            "    def find_module(self, name, path=None):\n"
+            "        return self.find_spec(name, path)\n"
+            "\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        root = name.split('.')[0]\n"
+            "\n"
+            "        if root in BLOCKED:\n"
+            "            raise ImportError(\n"
+            "                'библиотека отключена проверкой: ' + root\n"
+            "            )\n"
+            "\n"
+            "        return None\n"
+            "\n"
+            "\n"
+            "sys.meta_path.insert(0, Blocker())\n"
+        ) % (OPTIONAL_LIBRARIES,)
+
+    def test_discover_reports_skips_not_load_errors(self) -> None:
+        if os.environ.get(BARE_RUN_MARKER):
+            self.skipTest("дочерний запуск: рекурсия не нужна")
+
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "sitecustomize.py"
+            hook.write_text(self.blocker_source(), encoding="utf-8")
+
+            environment = dict(os.environ)
+            environment[BARE_RUN_MARKER] = "1"
+            environment["PYTHONPATH"] = os.pathsep.join(
+                [directory, str(SOURCE)]
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "tests",
+                    "-p",
+                    "test_*.py",
+                ],
+                cwd=str(SOURCE),
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=900,
+            )
+
+        output = completed.stdout.decode("utf-8", "replace")
+
+        failed_to_load = re.findall(
+            r"^ERROR: (\S+) \(unittest\.loader\._FailedTest",
+            output,
+            flags=re.M,
+        )
+
+        self.assertEqual(
+            failed_to_load,
+            [],
+            msg=(
+                "На машине без библиотек эти модули не загружаются, а "
+                "должны объявлять пропуск сами: "
+                + ", ".join(failed_to_load)
+                + "\n"
+                + output[-3000:]
+            ),
+        )
+
+        # Пропуски обязаны быть: если их нет, значит заградитель не
+        # сработал и проверка ничего не проверяет.
+        self.assertIn(
+            "skipped=",
+            output,
+            msg=(
+                "Ни одного пропуска — заградитель импорта не сработал, "
+                "и проверка прошла вхолостую:\n" + output[-3000:]
+            ),
+        )
 
 
 class SystemdContractTests(unittest.TestCase):
@@ -718,6 +875,235 @@ class ComposeNetworkTests(unittest.TestCase):
         self.assertIn("essnapshots:/snapshots", self.base)
 
 
+class ContinuousIntegrationTests(unittest.TestCase):
+    """
+    Прогон должен идти на тех версиях Python, на которых система работает.
+
+    Матрица проверок — такая же вещь, как список зависимостей: её
+    заводят один раз и потом не смотрят. Достаточно поднять Python в
+    Dockerfile, чтобы проверки продолжили гонять предыдущую версию — и
+    выкладка молча перестала быть проверенной.
+
+    Здесь версии берутся из самих файлов: из `FROM python:` в Dockerfile
+    и из строки про 3.8 в README. Если поменяется любая, проверка
+    потребует поменять и матрицу.
+    """
+
+    WORKFLOW = Path(".github") / "workflows" / "ci.yml"
+
+    def setUp(self) -> None:
+        self.path = SOURCE / self.WORKFLOW
+
+        if not self.path.is_file():
+            self.fail(
+                "Нет %s: весь набор запускается только руками"
+                % self.WORKFLOW.as_posix()
+            )
+
+        self.text = self.path.read_text(encoding="utf-8")
+
+    def container_python(self) -> str:
+        dockerfile = (
+            SOURCE / "Dockerfile"
+        ).read_text(encoding="utf-8")
+
+        match = re.search(
+            r"^FROM\s+python:(\d+\.\d+)",
+            dockerfile,
+            flags=re.M,
+        )
+
+        self.assertIsNotNone(
+            match,
+            msg="В Dockerfile не найден базовый образ python",
+        )
+
+        return match.group(1)
+
+    def test_matrix_covers_the_container_python(self) -> None:
+        version = self.container_python()
+
+        self.assertIn(
+            'python-version: "%s"' % version,
+            self.text,
+            msg=(
+                "Контейнер собирается на Python %s, а проверки его не "
+                "гоняют" % version
+            ),
+        )
+
+    def test_matrix_covers_the_server_python(self) -> None:
+        # Заявленная нижняя граница. Именно на ней набор однажды не
+        # запускался вовсе, а система на ней работает.
+        readme = (SOURCE / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "3.8",
+            readme,
+            msg="README больше не заявляет 3.8 — обновите проверку",
+        )
+
+        self.assertIn(
+            'python-version: "3.8"',
+            self.text,
+            msg=(
+                "Проект заявляет Python 3.8 и работает на нём, а "
+                "проверки на этой версии не запускаются"
+            ),
+        )
+
+    def test_suite_is_actually_run(self) -> None:
+        self.assertIn(
+            "unittest discover -s tests",
+            self.text,
+            msg="Проверки не запускают набор тестов",
+        )
+
+    def test_image_is_built(self) -> None:
+        # Несобираемый Dockerfile не виден ни одному тесту: он
+        # выясняется при выкладке.
+        self.assertIn("docker build", self.text)
+
+
+class ContainerRuntimeTests(unittest.TestCase):
+    """
+    Журналы с пределом и проверка живости, которая что-то значит.
+
+    Две вещи, каждая из которых тихо ломает эксплуатацию.
+
+    Драйвер журналов json-file по умолчанию не имеет предела. Семь
+    контейнеров работают непрерывно и печатают строку прогресса на
+    документ; диск на машине — 20 ГБ, и на нём же лежит индекс. Полный
+    диск останавливает и Elasticsearch, и обход, причём выглядит это как
+    отказ кластера, а не как переполнение.
+
+    HEALTHCHECK объявлен в образе, а образ у всех ролей один: проверка
+    стучится в порт 8000, который слушает только `api`. Шесть остальных
+    контейнеров навсегда получали unhealthy. Развёрнутая и работающая
+    система показывалась сломанной, а присмотр по статусу — который для
+    того и заводят — терял смысл.
+    """
+
+    # Роль, которая действительно слушает HTTP-порт.
+    SERVICE_WITH_HTTP = "api"
+
+    def setUp(self) -> None:
+        self.base = (
+            SOURCE / "docker-compose.yml"
+        ).read_text(encoding="utf-8")
+        self.app_path = SOURCE / "docker-compose.app.yml"
+        self.app = self.app_path.read_text(encoding="utf-8")
+
+    def application_services(self) -> dict:
+        """Тело каждого сервиса из docker-compose.app.yml."""
+
+        _, _, services = self.app.partition("\nservices:\n")
+
+        self.assertTrue(services, "блок services не найден")
+
+        blocks: dict = {}
+        current = None
+
+        for line in services.splitlines():
+            # Первый же ключ верхнего уровня закрывает блок services:
+            # дальше идут volumes и networks, чьи имена набраны с тем же
+            # отступом, что и имена сервисов.
+            if line and not line.startswith(" "):
+                break
+
+            heading = re.match(r"^  ([a-z][a-z0-9-]*):\s*$", line)
+
+            if heading:
+                current = heading.group(1)
+                blocks[current] = []
+                continue
+
+            if current is not None:
+                blocks[current].append(line)
+
+        return {
+            name: "\n".join(body)
+            for name, body in blocks.items()
+        }
+
+    def test_every_service_limits_its_log(self) -> None:
+        # Якорь распространяется слиянием, поэтому достаточно, чтобы он
+        # был объявлен и подмешан в общий блок.
+        self.assertIn("max-size:", self.app)
+        self.assertIn("max-file:", self.app)
+        self.assertIn("logging: *logging", self.app)
+
+        self.assertIn(
+            "max-size:",
+            self.base,
+            msg=(
+                "У Elasticsearch журнал без предела: он пишет постоянно "
+                "и заполнит диск раньше индекса"
+            ),
+        )
+
+    def test_roles_without_http_disable_the_image_healthcheck(self) -> None:
+        services = self.application_services()
+
+        self.assertIn(self.SERVICE_WITH_HTTP, services)
+
+        problems = []
+
+        for name, body in services.items():
+            if name == self.SERVICE_WITH_HTTP:
+                continue
+
+            if "healthcheck:" not in body:
+                problems.append(name)
+
+        self.assertEqual(
+            problems,
+            [],
+            msg=(
+                "HEALTHCHECK из образа стучится в порт 8000, а эти роли "
+                "его не слушают — они навсегда останутся unhealthy: "
+                + ", ".join(problems)
+            ),
+        )
+
+    def test_api_keeps_the_image_healthcheck(self) -> None:
+        services = self.application_services()
+
+        self.assertNotIn(
+            "healthcheck:",
+            services[self.SERVICE_WITH_HTTP],
+            msg=(
+                "Роль api — единственная с HTTP-портом, у неё проверка "
+                "из образа осмысленна и отключать её нечем"
+            ),
+        )
+
+    def test_elasticsearch_declares_readiness(self) -> None:
+        self.assertIn(
+            "healthcheck:",
+            self.base,
+            msg=(
+                "Без проверки готовности `docker compose up -d` "
+                "отвечает «поднято», пока кластер разворачивает шарды"
+            ),
+        )
+
+        # На одноузловом кластере реплики назначить некуда, и green не
+        # наступает никогда: ожидание green повесило бы запуск навсегда.
+        self.assertIn("wait_for_status=yellow", self.base)
+        self.assertNotIn("wait_for_status=green", self.base)
+
+    def test_application_waits_for_a_healthy_cluster(self) -> None:
+        self.assertIn(
+            "condition: service_healthy",
+            self.app,
+            msg=(
+                "depends_on без условия соблюдает только порядок "
+                "запуска, а не готовность"
+            ),
+        )
+
+
 class RequirementsTests(unittest.TestCase):
     """
     Каждая сторонняя библиотека, которую импортирует код, объявлена в
@@ -776,6 +1162,48 @@ class RequirementsTests(unittest.TestCase):
                         found.add(node.module.split(".")[0])
 
         return found
+
+    def requirement_lines(self) -> list:
+        raw = (
+            SOURCE / "requirements.txt"
+        ).read_text(encoding="utf-8")
+
+        return [
+            line.strip()
+            for line in raw.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+    def test_every_requirement_has_an_upper_bound(self) -> None:
+        """
+        Без верхней границы пересборка образа — это обновление
+        зависимостей.
+
+        `pip install --requirement requirements.txt` в Dockerfile берёт
+        последнее, что вышло к этому дню. Правка в одну строку и
+        обновление половины библиотек становятся одной операцией, причём
+        вторая половина происходит молча.
+
+        Случай, который это уже показал: `mode=` у `Image.fromarray`
+        исчезает в Pillow 13. У Pillow граница стояла, у lxml, pymupdf,
+        fastapi, uvicorn и остальных — нет.
+        """
+
+        unbounded = [
+            line
+            for line in self.requirement_lines()
+            if "<" not in line and "==" not in line
+        ]
+
+        self.assertEqual(
+            unbounded,
+            [],
+            msg=(
+                "У этих зависимостей нет верхней границы — очередная "
+                "пересборка образа возьмёт следующий мажорный выпуск: "
+                + ", ".join(unbounded)
+            ),
+        )
 
     def test_form_handlers_declare_python_multipart(self) -> None:
         uses_form = any(

@@ -127,6 +127,7 @@ systemctl is-active sochi-search-discovery.timer
 systemctl is-active sochi-search-publication-date.timer
 systemctl is-active sochi-search-pdf-ocr@1.timer
 systemctl is-active sochi-search-backup.timer
+systemctl is-active sochi-search-snapshot.timer
 ```
 
 В штатном режиме все значения — `active`.
@@ -250,6 +251,67 @@ BACKUP_SQLITE_QUICK_CHECK=ok
 sudo systemctl start sochi-search-backup.service
 sudo journalctl -u sochi-search-backup.service -n 80 --no-pager
 ```
+
+### Снимки индекса
+
+`operational backup` забирает очередь SQLite и код. Индекса в нём нет, и
+это осознанно: индекс производный. Но «производный» здесь не значит
+«дешёвый». Собрать его заново — это перераспознать корпус, недели работы
+обоих слотов OCR против часа восстановления из снимка.
+
+Поэтому индекс снимается отдельной службой:
+
+```bash
+systemctl is-active sochi-search-snapshot.timer
+```
+
+Включить:
+
+```bash
+sudo systemctl enable --now sochi-search-snapshot.timer
+```
+
+Снимок вручную и что должно получиться:
+
+```bash
+sudo systemctl start sochi-search-snapshot.service
+sudo journalctl -u sochi-search-snapshot.service -n 40 --no-pager
+```
+
+```text
+SNAPSHOT_OK=1
+SNAPSHOT_NAME=auto-20260826t040000z
+SNAPSHOT_STATE=SUCCESS
+SNAPSHOT_REMOVED_EXPIRED=0
+```
+
+Что лежит в хранилище:
+
+```bash
+sudo /opt/sochi-search/.venv/bin/python -B -m ops.snapshot --list
+```
+
+Три свойства, которые стоит знать до того, как понадобится.
+
+**Снимки инкрементальные.** В хранилище дописываются только сегменты,
+которых там ещё нет. Первый снимок стоит как весь индекс, каждый
+следующий — как изменения за сутки.
+
+**Уборка трогает только свои.** Удаляются снимки с приставкой `auto-`,
+и только сверх `ES_SNAPSHOT_RETENTION` штук. Снимок, снятый руками перед
+переездом (`docs/DEPLOY.md` называет его `full`), переживёт любое число
+ночных запусков.
+
+**Неудачный снимок ничего не удаляет.** Если хотя бы один шард не
+попал в снимок, задача обрывается до уборки: иначе годных копий стало бы
+меньше, а негодная добавилась.
+
+Хранилище лежит в томе `essnapshots`, отдельно от тома с данными. При
+отказе диска целиком это не спасёт — том на той же машине. Копия,
+которая переживёт машину, — это `docs/DEPLOY.md`, раздел «Перенос
+данных»: том выгружается в файл и уезжает с машины.
+
+Восстановление описано там же.
 
 ## Правила изменения OCR-настроек
 

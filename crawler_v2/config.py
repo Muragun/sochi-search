@@ -234,9 +234,14 @@ settings = CrawlerSettings(
         "sochi.ru",
     ),
 
+    # Значение по умолчанию, а не пример: без CRAWL_USER_AGENT в .env
+    # сайт видит именно его. Раньше здесь стояло «SochiSearchBot/2.0» —
+    # другое имя и версия трёхлетней давности, — а в примере настроек
+    # «SochiSearch/2.5.0». Две строки, ни одна не совпадала с VERSION,
+    # и по журналу сайта нельзя было понять, что за обходчик пришёл.
     user_agent=os.getenv(
         "CRAWL_USER_AGENT",
-        "SochiSearchBot/2.0",
+        "SochiSearch/2.6.0",
     ),
 
     connect_timeout=env_int(
