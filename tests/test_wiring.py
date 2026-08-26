@@ -29,7 +29,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from compat import standard_library_modules, unparse  # noqa: E402
+from compat import (  # noqa: E402
+    requires_repository,
+    standard_library_modules,
+    unparse,
+)
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -212,6 +216,7 @@ class ModuleWiringTests(unittest.TestCase):
         )
 
 
+@requires_repository
 class VersionIsConsistentTests(unittest.TestCase):
     """
     Версия проекта записана во многих местах, источник истины один — VERSION.
@@ -524,6 +529,7 @@ class SuiteLoadsWithoutOptionalLibrariesTests(unittest.TestCase):
         )
 
 
+@requires_repository
 class SystemdContractTests(unittest.TestCase):
     """Флаги из юнитов должны существовать в argparse."""
 
@@ -704,6 +710,7 @@ class ExtractionVersionTests(unittest.TestCase):
         )
 
 
+@requires_repository
 class OcrScheduleTests(unittest.TestCase):
     """
     Каждый слот OCR должен иметь собственный таймер.
@@ -757,6 +764,7 @@ class OcrScheduleTests(unittest.TestCase):
         self.assertIn("Unit=sochi-search-pdf-ocr@%i.service", text)
 
 
+@requires_repository
 class ComposeEnvironmentTests(unittest.TestCase):
     """
     Каждый сервис в compose должен получать пути контейнера.
@@ -820,6 +828,7 @@ class ComposeEnvironmentTests(unittest.TestCase):
             )
 
 
+@requires_repository
 class ComposeNetworkTests(unittest.TestCase):
     """
     Elasticsearch и приложение должны стоять в одной сети Docker.
@@ -875,6 +884,7 @@ class ComposeNetworkTests(unittest.TestCase):
         self.assertIn("essnapshots:/snapshots", self.base)
 
 
+@requires_repository
 class ContinuousIntegrationTests(unittest.TestCase):
     """
     Прогон должен идти на тех версиях Python, на которых система работает.
@@ -965,6 +975,7 @@ class ContinuousIntegrationTests(unittest.TestCase):
         self.assertIn("docker build", self.text)
 
 
+@requires_repository
 class ContainerRuntimeTests(unittest.TestCase):
     """
     Журналы с пределом и проверка живости, которая что-то значит.

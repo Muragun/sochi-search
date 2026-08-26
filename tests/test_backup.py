@@ -17,6 +17,12 @@ from ops.backup import (
 )
 from ops.verify_backup import verify_archive
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compat import requires_repository  # noqa: E402
+
 
 class OperationalBackupTests(unittest.TestCase):
     def create_project(self, root: Path) -> tuple[Path, Path, Path]:
@@ -244,6 +250,7 @@ class OperationalBackupTests(unittest.TestCase):
         ]
         self.assertEqual(unsupported_calls, [])
 
+    @requires_repository
     def test_systemd_profile_supports_live_wal_backup(self) -> None:
         unit_path = (
             Path(__file__).parents[1]
@@ -287,6 +294,7 @@ class OperationalBackupTests(unittest.TestCase):
         )
 
 
+@requires_repository
 class RestorableSourceTests(unittest.TestCase):
     """
     Копия обязана содержать то, чем система запускается, а не только код.

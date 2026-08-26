@@ -639,6 +639,28 @@ class SearchApiImportTests(unittest.TestCase):
         # ронял бы поиск на старте.
         import subprocess
 
+        # Проверка про PyMuPDF, но импортируется весь сервис, а он
+        # тянет requests через es_http. Без requests дочерний процесс
+        # падает по другой причине, и проверка отвечала бы не на свой
+        # вопрос — то есть врала бы.
+        #
+        # Спрашивать `import requests` тут недостаточно: соседний
+        # tests/test_crawler_runtime кладёт в sys.modules собственную
+        # заглушку с этим именем, и в родительском процессе импорт
+        # пройдёт. У заглушки, в отличие от настоящего пакета, нет
+        # `__file__` — по нему их и различают, тем же способом, что и в
+        # tests/test_large_pdf_fetch.
+        try:
+            import requests
+        except ImportError:
+            requests = None
+
+        if getattr(requests, "__file__", None) is None:
+            self.skipTest(
+                "нужен настоящий requests: сервис импортирует его через "
+                "es_http, и без него проверять отсутствие PyMuPDF нечем"
+            )
+
         source_root = Path(__file__).resolve().parents[1]
         code = (
             "import sys;"

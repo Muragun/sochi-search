@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from compat import unparse  # noqa: E402
+from compat import requires_repository, unparse  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE))
@@ -32,6 +32,7 @@ from app_v2.admin_tasks import (  # noqa: E402
 )
 
 
+@requires_repository
 class TaskDefinitionTests(unittest.TestCase):
     def test_every_task_has_human_description(self) -> None:
         for task in TASKS:

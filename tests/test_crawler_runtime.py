@@ -44,6 +44,32 @@ except ImportError:
 try:
     import requests  # noqa: F401
 except ImportError:
+    # Заглушки кладутся в sys.modules, а он один на процесс: их получает
+    # не только этот модуль, но и всё, что импортируется после. Значит
+    # заглушка обязана вести себя как класс, а не как метка.
+    #
+    # Раньше здесь стояло `Session = object`, и на машине без requests
+    # это ломало совсем другой тест: `app_v2/es_http.py` при импорте
+    # создаёт клиента и вызывает `Retry(total=2, connect=2, ...)`, а
+    # `object()` аргументов не принимает. Падал `test_document_titles`,
+    # с сообщением «object() takes no arguments» и трассировкой, в
+    # которой не было ни слова про заглушки.
+    #
+    # Замечено только тогда, когда набор впервые запустили там, где
+    # библиотек действительно нет.
+    class StubObject:
+        """Принимает любые аргументы и ничего не делает."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def __call__(self, *args, **kwargs):
+            return self
+
+        def __getattr__(self, name):
+            return StubObject()
+
     requests_module = types.ModuleType("requests")
     requests_adapters_module = types.ModuleType(
         "requests.adapters"
@@ -52,9 +78,9 @@ except ImportError:
     urllib3_util_module = types.ModuleType("urllib3.util")
     urllib3_retry_module = types.ModuleType("urllib3.util.retry")
 
-    requests_module.Session = object
-    requests_adapters_module.HTTPAdapter = object
-    urllib3_retry_module.Retry = object
+    requests_module.Session = StubObject
+    requests_adapters_module.HTTPAdapter = StubObject
+    urllib3_retry_module.Retry = StubObject
 
     sys.modules["requests"] = requests_module
     sys.modules["requests.adapters"] = requests_adapters_module

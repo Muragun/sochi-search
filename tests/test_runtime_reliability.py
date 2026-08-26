@@ -12,6 +12,12 @@ from ops.wait_for_elasticsearch import (
     wait_for_elasticsearch,
 )
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from compat import requires_repository  # noqa: E402
+
 
 class FakeResponse:
     def __init__(self, payload: dict) -> None:
@@ -40,6 +46,7 @@ class FakeClock:
         self.value += seconds
 
 
+@requires_repository
 class RuntimeReliabilityTests(unittest.TestCase):
     def test_probe_requires_yellow_or_green_without_timeout(self) -> None:
         payloads = (
