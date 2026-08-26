@@ -258,14 +258,39 @@ def ensure_repository(
 
         return False
 
-    call(
-        "PUT",
-        path,
-        {
-            "type": "fs",
-            "settings": {"location": location},
-        },
-    )
+    try:
+        call(
+            "PUT",
+            path,
+            {
+                "type": "fs",
+                "settings": {"location": location},
+            },
+        )
+    except SnapshotError as error:
+        # Самая частая причина отказа на первом запуске, и по тексту
+        # кластера догадаться о ней можно не сразу.
+        #
+        # Elasticsearch пишет в хранилище сам и делает это только внутри
+        # каталогов, перечисленных в `path.repo`. Под Docker он приходит
+        # из compose и уже настроен; при установке без Docker его надо
+        # дописать в `elasticsearch.yml` и перезапустить узел —
+        # настройка не динамическая.
+        if "path.repo" in str(error):
+            raise SnapshotError(
+                "{0}\n\n"
+                "Кластеру не разрешено писать в {1}. Разрешается это "
+                "не здесь, а в самом Elasticsearch:\n"
+                "  • под Docker — path.repo в docker-compose.yml "
+                "(уже настроено);\n"
+                "  • без Docker — строка `path.repo: {1}` в "
+                "elasticsearch.yml и перезапуск узла, настройка не "
+                "динамическая.\n"
+                "Каталог должен существовать и принадлежать "
+                "пользователю elasticsearch.".format(error, location)
+            ) from error
+
+        raise
 
     return True
 

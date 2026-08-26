@@ -265,6 +265,40 @@ sudo journalctl -u sochi-search-backup.service -n 80 --no-pager
 systemctl is-active sochi-search-snapshot.timer
 ```
 
+**Сначала — разрешить кластеру писать снимки.** Elasticsearch кладёт их
+сам и только внутрь каталогов из `path.repo`. Под Docker настройка
+приходит из compose и уже стоит. При установке без Docker её нет, и
+первый же запуск отвечает `doesn't match any of the locations specified
+by path.repo`.
+
+Проверить, настроено ли:
+
+```bash
+curl -s "http://127.0.0.1:9200/_nodes/settings?filter_path=**.path" | grep -o 'repo[^}]*'
+```
+
+Если пусто — завести каталог и дописать настройку:
+
+```bash
+sudo mkdir -p /var/lib/elasticsearch/snapshots
+sudo chown elasticsearch:elasticsearch /var/lib/elasticsearch/snapshots
+
+# в /etc/elasticsearch/elasticsearch.yml
+path.repo: /var/lib/elasticsearch/snapshots
+
+sudo systemctl restart elasticsearch
+```
+
+Настройка не динамическая: без перезапуска узла она не подхватится.
+Путь после этого прописать в `.env`:
+
+```bash
+ES_SNAPSHOT_LOCATION=/var/lib/elasticsearch/snapshots
+```
+
+Значение по умолчанию (`/snapshots`) — это путь внутри контейнера, и на
+машине без Docker оно не подойдёт.
+
 Включить:
 
 ```bash

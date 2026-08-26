@@ -178,6 +178,41 @@ class RepositoryTests(unittest.TestCase):
             [method for method, _ in cluster.methods_and_paths()],
         )
 
+    def test_unconfigured_path_repo_says_where_to_fix_it(self) -> None:
+        """
+        Самый частый отказ первого запуска обязан объяснять себя.
+
+        Elasticsearch пишет снимки сам и только внутрь каталогов из
+        `path.repo`. Под Docker он приходит из compose и настроен; при
+        установке без Docker его надо дописать в `elasticsearch.yml` и
+        перезапустить узел — настройка не динамическая, и по ответу
+        кластера это не очевидно.
+        """
+
+        cluster = FakeCluster(
+            repository=None,
+            responses={
+                ("PUT", "/_snapshot/sochi"): SnapshotError(
+                    "Elasticsearch ответил 500: [sochi] location "
+                    "[/snapshots] doesn't match any of the locations "
+                    "specified by path.repo"
+                )
+            },
+        )
+
+        with self.assertRaises(SnapshotError) as caught:
+            ensure_repository(
+                cluster,
+                repository="sochi",
+                location="/snapshots",
+            )
+
+        message = str(caught.exception)
+
+        self.assertIn("elasticsearch.yml", message)
+        self.assertIn("перезапуск узла", message)
+        self.assertIn("/snapshots", message)
+
     def test_repository_pointing_elsewhere_is_an_error(self) -> None:
         """
         Перерегистрация потеряла бы ссылку на снятые снимки.
